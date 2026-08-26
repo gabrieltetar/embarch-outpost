@@ -15,8 +15,10 @@
  * kernel itself calls it.
  *
  * These run in the hottest paths in the system — inside the context switch and
- * inside _isr_wrapper(). Each one reads the cycle counter, writes one slot,
- * and returns.
+ * inside _isr_wrapper(). Each one writes one slot and returns. **No clock is
+ * read here**, which is the entire point of layout 2: a counter read in this
+ * path is cost the instrument charges to the code it is measuring (design.md
+ * §3 decision 4).
  */
 
 #include "outpost_priv.h"
@@ -34,6 +36,10 @@
  * wrapper is about to dispatch on. IPSR still names the same exception at
  * sys_trace_isr_exit(), so nesting and tail-chaining fall out of the record
  * stream instead of having to be reconstructed by the host.
+ *
+ * This is now the only non-trivial read left in the emit path, and it is a
+ * core-register move rather than a peripheral access — which is exactly why
+ * the counter read went and this stayed.
  */
 static inline uint32_t active_vector(void)
 {

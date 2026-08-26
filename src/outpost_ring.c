@@ -41,6 +41,10 @@
 #include <zephyr/sys/util.h>
 
 /* CONFIG_EMBARCH_OUTPOST_RING_BYTES rounded down to a power-of-two slot count.
+ * OUTPOST_SLOT_BYTES is BUILD_ASSERTed against the real slot size in
+ * outpost_priv.h, so this division cannot silently under-report the RAM the
+ * ring takes the way it did while a slot was 20 bytes against a 16-byte
+ * constant.
  * A power of two is what makes `index & MASK` correct across the 32-bit
  * wraparound of `head`/`tail`, which is what makes the whole scheme survive a
  * long run.
@@ -75,14 +79,15 @@ static struct outpost_slot ring[RING_SLOTS];
 static atomic_t ring_head;
 static atomic_t ring_tail;
 
-/* Drop account. `gap_dropped` is the authoritative count; the two cycle
- * stamps bound the span it was lost across. `gap_first` is only written by
- * the producer that takes the count from 0 to 1, so the span starts at the
- * first loss rather than the last.
+/* Drop account: a count, and nothing else.
+ *
+ * Layout 1 also kept the cycle stamps of the first and last loss, to bound the
+ * span they fell across. There is no clock on this side any more (design.md §3
+ * decision 4), so the bound is the host's to draw: a gap record is always the
+ * first record of the next frame, which puts the losses between two arrival
+ * stamps.
  */
 static atomic_t gap_dropped;
-static uint32_t gap_first;
-static uint32_t gap_last;
 
 /* A slot holding reservation `idx` publishes `idx + 1`, never `idx`.
  *
@@ -113,8 +118,6 @@ void outpost_ring_init(void)
 	atomic_set(&ring_head, 0);
 	atomic_set(&ring_tail, 0);
 	atomic_set(&gap_dropped, 0);
-	gap_first = 0;
-	gap_last = 0;
 }
 
 uint32_t outpost_ring_slots(void)
@@ -122,19 +125,8 @@ uint32_t outpost_ring_slots(void)
 	return RING_SLOTS;
 }
 
-static void note_drop(uint32_t cycles)
-{
-	atomic_val_t before = atomic_inc(&gap_dropped);
-
-	if (before == 0) {
-		gap_first = cycles;
-	}
-	gap_last = cycles;
-}
-
 void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 {
-	uint32_t cycles = k_cycle_get_32();
 	uint32_t head;
 
 	for (;;) {
@@ -157,7 +149,7 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 				continue;
 			}
 #endif
-			note_drop(cycles);
+			atomic_inc(&gap_dropped);
 			return;
 		}
 
@@ -168,7 +160,6 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 
 	struct outpost_slot *slot = &ring[head & RING_MASK];
 
-	slot->cycles = cycles;
 	slot->kind = kind;
 	slot->a = a;
 	slot->b = b;
@@ -198,7 +189,6 @@ bool outpost_ring_get(struct outpost_slot *out)
 		return false;
 	}
 
-	out->cycles = slot->cycles;
 	out->kind = slot->kind;
 	out->a = slot->a;
 	out->b = slot->b;
@@ -207,15 +197,11 @@ bool outpost_ring_get(struct outpost_slot *out)
 	return true;
 }
 
-bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *cycle_span)
+bool outpost_ring_take_gap(uint32_t *dropped)
 {
-	/* Read the bounds before clearing the count, so a drop landing
-	 * mid-call is counted in the next gap record rather than producing a
-	 * span that starts after it. The span is a bound on where the losses
-	 * were, not an exact measure of them, and is documented as such.
+	/* A single atomic read-and-clear: a drop landing mid-call is counted in
+	 * the next gap record rather than being lost between the two.
 	 */
-	uint32_t first = gap_first;
-	uint32_t last = gap_last;
 	atomic_val_t count = atomic_clear(&gap_dropped);
 
 	if (count == 0) {
@@ -223,7 +209,5 @@ bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *
 	}
 
 	*dropped = (uint32_t)count;
-	*first_cycles = first;
-	*cycle_span = last - first;
 	return true;
 }

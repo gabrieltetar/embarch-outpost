@@ -60,12 +60,9 @@ size_t outpost_put_record(uint8_t *buf, size_t cap, const struct outpost_slot *r
 	size_t n = 0;
 	size_t w;
 
-	w = outpost_put_varint(&buf[n], cap - n, rec->cycles);
-	if (w == 0) {
-		return 0;
-	}
-	n += w;
-
+	/* No timestamp: the record opens with its kind. See outpost_priv.h's
+	 * "No clock on this side".
+	 */
 	if (n >= cap) {
 		return 0;
 	}

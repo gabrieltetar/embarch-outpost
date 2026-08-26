@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover - Zephyr's own build requires pyelftools
     )
     raise
 
-MANIFEST_SCHEMA = 1
+MANIFEST_SCHEMA = 2
 
 
 class Elf:
@@ -274,7 +274,6 @@ def main() -> int:
     ap.add_argument("--build-id", required=True)
     ap.add_argument("--outpost-version", required=True)
     ap.add_argument("--layout-version", type=int, required=True)
-    ap.add_argument("--cycles-per-sec-config", type=int, default=0)
     args = ap.parse_args()
 
     elf = Elf(args.elf)
@@ -285,11 +284,11 @@ def main() -> int:
             "build_id": args.build_id,
             "outpost_version": args.outpost_version,
             "record_layout_version": args.layout_version,
-            # Present for reference only. The host uses the rate the firmware
-            # reports in its header frame, because this Kconfig legitimately
-            # defaults to 0 on targets that read their timer frequency at
-            # runtime (decision 4).
-            "cycles_per_sec_config": args.cycles_per_sec_config,
+            # No cycle rate, in any form. Schema 1 carried
+            # CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC here "for reference"; layout 2
+            # took every timestamp off the wire (design.md §3 decision 4), so a
+            # rate in the manifest would describe nothing and read as though
+            # something on this side were still clocked.
             "arch": elf.arch,
             "markers": read_markers(elf, notes),
             "threads": read_threads(elf, notes),

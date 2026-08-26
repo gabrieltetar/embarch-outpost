@@ -28,8 +28,10 @@ check(header["record_layout_version"] == manifest["record_layout_version"],
       f"{manifest['record_layout_version']}")
 check(header["build_id"] == manifest["build_id"],
       f"stream build_id {header['build_id']!r} != manifest {manifest['build_id']!r}")
-check(header["cycles_per_sec"] > 0,
-      f"header reports cycles_per_sec={header['cycles_per_sec']}")
+check(header["record_layout_version"] == 2,
+      f"header reports record layout {header['record_layout_version']}, not 2")
+check("cycles_per_sec" not in header,
+      "the header still carries a cycle rate; layout 2 has no DUT clock to describe")
 check(not trace["manifest_refused"], "the matching manifest was refused")
 
 check(stats["bad_crc"] == 0, f"{stats['bad_crc']} frames failed their CRC")
@@ -57,19 +59,58 @@ check(sorted(manifest["markers"].values()) == ["BURST", "WORK_BEGIN", "WORK_END"
 gaps = [r for r in trace["records"] if r["kind"] == "gap"]
 check(any(r["a"] > 0 for r in gaps), "a gap record was emitted but reported zero drops")
 
-# Cycles must be non-decreasing once unwrapped -- the ring publishes in
-# reservation order, so anything else means it reordered records. Gap records
-# are the documented exception: they are stamped when their losses started and
-# emitted when there was room to report them.
-cycles = [r["cycles"] for r in trace["records"] if r["kind"] != "gap"]
-check(all(b >= a for a, b in zip(cycles, cycles[1:])),
-      "non-gap records are not in non-decreasing cycle order")
+# No record carries a timestamp at all any more, and nothing downstream may
+# start expecting one back: a `cycles` key reappearing in a decoded row would
+# mean layout 1 crept back in somewhere.
+check(all("cycles" not in r for r in trace["records"]),
+      "a decoded record still carries a `cycles` field")
 
-# And the unwrap must not have run away: this test lasts under a second at
-# 1 MHz, so nothing should be anywhere near a 2**32 wrap.
-check(max(cycles) < (1 << 32),
-      f"unwrapped cycles reached {max(cycles)}, which means a wrap was inferred "
-      "from a backwards step that was not one")
+# Frame indices must be non-decreasing and must cover every frame that
+# decoded, because that index is the only thing a host has to join arrival
+# stamps onto (design.md §3 decision 18).
+frame_indices = [r["frame_index"] for r in trace["records"]]
+check(all(b >= a for a, b in zip(frame_indices, frame_indices[1:])),
+      "records are not in frame order")
+check(len(set(frame_indices)) > 1, "every record landed in one frame")
+
+# This capture went to stdout, not through a receiver, so nothing stamped it.
+# An untimed trace is a real answer and must render as one -- an empty column,
+# never a fabricated time.
+check(all(r["rx_utc_ms"] == "" for r in trace["records"]),
+      "a capture nobody stamped came out with arrival times in it")
+check(stats["stamped_frames"] == 0,
+      f"{stats['stamped_frames']} frames were stamped in a capture with no receiver")
+
+# Every gap record must be the first record of its frame -- that position is
+# the whole of what bounds the losses in time now (OUTPOST_KIND_GAP).
+by_frame: dict[int, list] = {}
+for r in trace["records"]:
+    by_frame.setdefault(r["frame_index"], []).append(r)
+for r in trace["records"]:
+    if r["kind"] == "gap":
+        first = by_frame[r["frame_index"]][0]
+        check(first is r or first["kind"] == "gap",
+              f"a gap record sits mid-frame in frame {r['frame_index']}")
+check(all(r["b"] == 0 for r in trace["records"] if r["kind"] == "gap"),
+      "a gap record still reports a cycle span in `b`")
+
+# And the arrival join has to work when stamps *are* supplied. Synthesised
+# here, and said to be: no outpost byte has crossed a real UART, so there is no
+# real set of stamps in this repo to use instead.
+arrival_path = raw_path + ".arrival.csv"
+with open(arrival_path, "w", encoding="utf-8") as fh:
+    fh.write("frame_index,rx_utc_ms\n")
+    for i in range(stats["frames"]):
+        fh.write(f"{i},{1_700_000_000_000 + i * 20}\n")
+stamped = json.loads(subprocess.run(
+    [sys.executable, f"{module_dir}/scripts/decode_outpost.py",
+     "--manifest", manifest_path, "--arrival", arrival_path, "--json", raw_path],
+    capture_output=True, text=True, check=True).stdout)
+check(all(r["rx_utc_ms"] != "" for r in stamped["records"]),
+      "supplied arrival stamps did not reach every row")
+check(all(r["rx_utc_ms"] == 1_700_000_000_000 + r["frame_index"] * 20
+          for r in stamped["records"]),
+      "an arrival stamp landed on the wrong frame")
 
 # And a manifest that does not belong to this build must be refused, not
 # applied. This is the failure mode the whole build-ID mechanism exists for.

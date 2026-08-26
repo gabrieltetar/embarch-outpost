@@ -13,6 +13,21 @@
  * ../embarch-doc/embarch-outpost/design.md §4) is that every wire record is
  * pinned by a test on both sides, against identical literal bytes.
  *
+ * ---- No clock on this side --------------------------------------------------
+ *
+ * **A record carries no time.** Layout 2 removed the per-record
+ * `k_cycle_get_32()` stamp outright: the emit path runs inside the context
+ * switch and inside `_isr_wrapper()`, and a counter read there is cost the
+ * instrument charges to the exact path it is measuring (design.md §3 decision
+ * 4, reworked 2026-08-26). Nothing in this module reads a clock any more —
+ * not per record, not per frame.
+ *
+ * The clock is the host's: Core stamps each frame with its own receipt time as
+ * the bytes arrive (`embarch-core/design.md` §3 decision 30), so **every
+ * record in a frame shares one timestamp**, and a frame is the finest interval
+ * this wire can resolve. Ordering inside a frame is real; duration inside one
+ * is not measurable and must never be interpolated (design.md §3 decision 17).
+ *
  * ---- Frame ----------------------------------------------------------------
  *
  *   frame := COBS(body || crc32_ieee(body) as 4 bytes LE) || 0x00
@@ -29,7 +44,6 @@
  * frame_type 0x01 -- Records. payload is a postcard `Vec<Record>`:
  *
  *   count: varint(u32), then `count` records, each:
- *       cycles: varint(u32)   -- k_cycle_get_32(), ABSOLUTE (decision 4)
  *       kind:   u8            -- enum outpost_kind
  *       a:      varint(u32)
  *       b:      varint(u32)
@@ -40,12 +54,13 @@
  *
  *       layout_version:  u8
  *       flags:           u8     -- enum outpost_header_flag
- *       cycles_per_sec:  varint(u32)  -- sys_clock_hw_cycles_per_sec(), READ
- *                                       AT RUNTIME: the Kconfig is legitimately
- *                                       0 on targets that read their timer
- *                                       frequency at runtime (decision 4)
  *       outpost_version: postcard string (varint len, then bytes)
  *       build_id:        postcard string
+ *
+ * The header carried a `cycles_per_sec` field through layout 1 and does not
+ * any more: there is no DUT clock left for it to describe, and a rate reported
+ * beside timestamps that are not the DUT's would invite exactly the cross-clock
+ * arithmetic decision 17 forbids.
  *
  * The header carries no manifest CRC. It cannot: decision 9's rework replaced
  * the post-link CRC patch with a compile-time build ID, and a manifest
@@ -67,14 +82,20 @@
 
 #include <zephyr/kernel.h>
 
-/** Bump on ANY change to the record or frame layout above. */
-#define OUTPOST_RECORD_LAYOUT_VERSION 1
+/** Bump on ANY change to the record or frame layout above.
+ *
+ *  2 -- records and the header lost every timestamp; the host stamps frames.
+ *  1 -- absolute k_cycle_get_32() in every record, cycles_per_sec in the
+ *       header. Not decoded by anything current: a layout-1 stream against a
+ *       layout-2 decoder is refused rather than reinterpreted.
+ */
+#define OUTPOST_RECORD_LAYOUT_VERSION 2
 
 #define OUTPOST_FRAME_RECORDS 0x01u
 #define OUTPOST_FRAME_HEADER  0x02u
 
 /** Record kinds. Append-only: a host decoding an unknown kind must skip it,
- *  which the fixed {cycles, kind, a, b} shape is what makes possible.
+ *  which the fixed {kind, a, b} shape is what makes possible.
  */
 enum outpost_kind {
 	OUTPOST_KIND_THREAD_SWITCH_IN = 0,  /* a = thread pointer */
@@ -85,14 +106,20 @@ enum outpost_kind {
 	OUTPOST_KIND_THREAD_CREATE = 5,     /* a = thread pointer */
 	OUTPOST_KIND_THREAD_NAME = 6,       /* a = thread pointer */
 	OUTPOST_KIND_MARKER = 7,            /* a = marker ID, b = engineer's arg */
-	/* a = records dropped, b = cycle span they were lost across.
+	/* a = records dropped. b = 0, reserved.
 	 *
-	 * The ONLY record whose `cycles` can go backwards relative to the
-	 * records around it. It is stamped when the losses started and emitted
-	 * when the ring next had room to report them, and a FIFO ring cannot
-	 * make those the same moment. A host must place a gap by its timestamp
-	 * rather than by its position, and must not infer a counter wrap from a
-	 * small backwards step — see the unwrap rule in scripts/decode_outpost.py.
+	 * `b` carried the cycle span the losses were lost across through layout
+	 * 1 and cannot any more — there is no clock here to measure it with.
+	 * What replaces it is a position guarantee: **a gap record is always the
+	 * first record of the next records frame**, so a host bounds the losses
+	 * by the arrival stamps of the frame before it and the frame carrying
+	 * it. That is a bound of one frame, stated as a bound.
+	 *
+	 * It also ends the one anomaly layout 1 had: a gap's timestamp could
+	 * precede the records printed after it (it was stamped when the losses
+	 * started, emitted when the ring next had room), which broke the host's
+	 * unwrap on the first real capture. With no timestamps there is no
+	 * unwrap and no backwards step to misread.
 	 */
 	OUTPOST_KIND_GAP = 8,
 };
@@ -114,11 +141,10 @@ enum outpost_header_flag {
 	OUTPOST_FLAG_OVERFLOW_BLOCK = BIT(5),
 };
 
-/** One ring slot. 16 bytes: three 32-bit fields, a kind, and the publish
- *  sequence that makes the ring lock-free (see outpost_ring.c).
+/** One ring slot: two 32-bit payload fields, a kind, and the publish sequence
+ *  that makes the ring lock-free (see outpost_ring.c).
  */
 struct outpost_slot {
-	uint32_t cycles;
 	uint32_t a;
 	uint32_t b;
 	uint8_t kind;
@@ -128,12 +154,25 @@ struct outpost_slot {
 
 #define OUTPOST_SLOT_BYTES 16
 
+/* This constant is what CONFIG_EMBARCH_OUTPOST_RING_BYTES is divided by to
+ * size the ring, so a slot larger than it means the ring quietly allocates
+ * more RAM than the Kconfig asked for. It did: a layout-1 slot was 20 bytes
+ * against this same 16, so every ring was 1.25x its configured size and the
+ * unit test asserting `slots * OUTPOST_SLOT_BYTES <= RING_BYTES` passed
+ * anyway. Dropping the timestamp made the two agree; this is what keeps them
+ * agreeing.
+ */
+BUILD_ASSERT(sizeof(struct outpost_slot) == OUTPOST_SLOT_BYTES,
+	     "OUTPOST_SLOT_BYTES no longer matches the slot it sizes the ring by");
+
 /* ---- ring (outpost_ring.c) ---- */
 
 void outpost_ring_init(void);
 
 /** Emit one record. Any context, including an ISR. Never blocks unless
  *  CONFIG_EMBARCH_OUTPOST_OVERFLOW_BLOCK and the caller is a thread.
+ *
+ *  Reads no clock. The whole body is a CAS, three stores and a publish.
  */
 void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b);
 
@@ -143,11 +182,12 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b);
 bool outpost_ring_get(struct outpost_slot *out);
 
 /** Take and clear the accumulated drop account. Returns false when nothing
- *  has been dropped since the last call. `first_cycles` is when the first of
- *  them was lost — the gap record is stamped with that, not with the moment it
- *  was reported.
+ *  has been dropped since the last call.
+ *
+ *  The count is all there is: where in time the losses fell is bounded
+ *  host-side by the frames bracketing the gap record, per OUTPOST_KIND_GAP.
  */
-bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *cycle_span);
+bool outpost_ring_take_gap(uint32_t *dropped);
 
 /** Total slots. Exposed for the tests. */
 uint32_t outpost_ring_slots(void);
@@ -165,8 +205,8 @@ size_t outpost_put_string(uint8_t *buf, size_t cap, const char *s);
  */
 size_t outpost_put_record(uint8_t *buf, size_t cap, const struct outpost_slot *rec);
 
-/** Worst case for one record: 5 + 1 + 5 + 5. */
-#define OUTPOST_RECORD_MAX_BYTES 16
+/** Worst case for one record: 1 + 5 + 5. */
+#define OUTPOST_RECORD_MAX_BYTES 11
 
 /** COBS-encode `len` bytes. Does not append the trailing 0x00 delimiter.
  *  Worst-case output is len + len/254 + 2.

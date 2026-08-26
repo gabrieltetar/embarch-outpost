@@ -125,14 +125,12 @@ set_property(GLOBAL PROPERTY embarch_outpost_script
 set_property(GLOBAL PROPERTY embarch_outpost_manifest_path ${OUTPOST_MANIFEST})
 set_property(GLOBAL PROPERTY embarch_outpost_build_id "${OUTPOST_BUILD_ID}")
 set_property(GLOBAL PROPERTY embarch_outpost_version "${OUTPOST_VERSION}")
-set_property(GLOBAL PROPERTY embarch_outpost_cycles "${CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC}")
 
 function(embarch_outpost_manifest)
   get_property(_script GLOBAL PROPERTY embarch_outpost_script)
   get_property(_out GLOBAL PROPERTY embarch_outpost_manifest_path)
   get_property(_build_id GLOBAL PROPERTY embarch_outpost_build_id)
   get_property(_version GLOBAL PROPERTY embarch_outpost_version)
-  get_property(_cycles GLOBAL PROPERTY embarch_outpost_cycles)
 
   if(TARGET native_runner_executable)
     set(_target native_runner_executable)
@@ -148,8 +146,7 @@ function(embarch_outpost_manifest)
             --out ${_out}
             --build-id ${_build_id}
             --outpost-version ${_version}
-            --layout-version 1
-            --cycles-per-sec-config ${_cycles}
+            --layout-version 2
     BYPRODUCTS ${_out}
     VERBATIM)
 endfunction()

@@ -7,7 +7,12 @@
  * @file
  * @brief Init, the drain thread, and the UART transport.
  *
- * design.md §3 decisions 3, 4, 5 and §5.2.
+ * design.md §3 decisions 3, 4, 5, 17 and §5.2.
+ *
+ * The drain thread reads k_uptime_get() to pace the header frame and nothing
+ * else reads a clock in this module. That one is not a timestamp: it never
+ * reaches the wire, and it runs in the drain thread rather than in the emit
+ * path (design.md §3 decision 4).
  *
  * The outpost owns its whole emit path. CONFIG_TRACING_USER does not select
  * TRACING_CORE (subsys/tracing/CMakeLists.txt, verified), so Zephyr's ring,
@@ -33,7 +38,6 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys_clock.h>
 
 LOG_MODULE_REGISTER(embarch_outpost, CONFIG_EMBARCH_OUTPOST_LOG_LEVEL);
 
@@ -75,12 +79,11 @@ static K_SEM_DEFINE(tx_done, 0, 1);
  */
 static const struct outpost_marker_def *volatile marker_table_keep = outpost_marker_table;
 
-/* Worst-case header body: type, seq, layout version, flags, a 5-byte cycle
- * rate, and two length-prefixed strings. A batch too small to hold one is a
- * configuration that silently produces an undecodable stream, so it fails to
- * build instead.
+/* Worst-case header body: type, seq, layout version, flags, and two
+ * length-prefixed strings. A batch too small to hold one is a configuration
+ * that silently produces an undecodable stream, so it fails to build instead.
  */
-#define HEADER_MAX_BYTES (9 + 2 * (2 + CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX))
+#define HEADER_MAX_BYTES (4 + 2 * (2 + CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX))
 BUILD_ASSERT(BATCH_BYTES >= HEADER_MAX_BYTES,
 	     "CONFIG_EMBARCH_OUTPOST_BATCH_BYTES cannot hold a header frame; "
 	     "raise it or lower CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX");
@@ -197,17 +200,11 @@ static void send_header(void)
 	body[n++] = OUTPOST_RECORD_LAYOUT_VERSION;
 	body[n++] = header_flags();
 
-	/* Read at runtime, never from CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC:
-	 * that Kconfig legitimately defaults to 0 when the timer reads its own
-	 * frequency at runtime (kernel/Kconfig), so a build-time rate would be
-	 * silently zero on exactly those targets.
+	/* Layout 1 put sys_clock_hw_cycles_per_sec() here, to give the host a
+	 * rate for the per-record cycle counts. Both are gone: there is no DUT
+	 * clock in this module any more, and reporting a rate next to the host's
+	 * own timestamps would only invite arithmetic across two clocks.
 	 */
-	w = outpost_put_varint(&body[n], cap - n, (uint32_t)sys_clock_hw_cycles_per_sec());
-	if (w == 0) {
-		return;
-	}
-	n += w;
-
 	w = outpost_put_string(&body[n], cap - n, outpost_version());
 	if (w == 0) {
 		return;
@@ -247,19 +244,17 @@ static size_t build_records_frame(void)
 	 * space there to be reported.
 	 */
 	uint32_t dropped;
-	uint32_t first;
-	uint32_t span;
 
-	if (outpost_ring_take_gap(&dropped, &first, &span)) {
-		/* Stamped when the losses started, not when the drain thread
-		 * got around to reporting them. That makes a gap record the one
-		 * record whose cycles can precede the records printed after it,
-		 * which is stated on OUTPOST_KIND_GAP and handled host-side.
+	if (outpost_ring_take_gap(&dropped)) {
+		/* First record of this frame, always — that position is the
+		 * whole of what a host has to bound the losses with now that no
+		 * record carries a time (OUTPOST_KIND_GAP). It is emitted before
+		 * the loop below so a full ring cannot push it to the back of
+		 * the batch.
 		 */
-		rec.cycles = first;
 		rec.kind = OUTPOST_KIND_GAP;
 		rec.a = dropped;
-		rec.b = span;
+		rec.b = 0;
 		size_t w = outpost_put_record(&batch_buf[n], sizeof(batch_buf) - n, &rec);
 
 		if (w > 0) {

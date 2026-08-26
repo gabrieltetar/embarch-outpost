@@ -38,9 +38,10 @@ ZTEST(outpost_wire, test_varint_literal_bytes)
 	zassert_equal(buf[0], 0xAC);
 	zassert_equal(buf[1], 0x02);
 
-	/* The worst case decision 4 pays for: an absolute 32-bit cycle count
-	 * near the top of its range costs five bytes, not the four the design
-	 * originally quoted.
+	/* The five-byte worst case. Layout 1 paid it once per record for an
+	 * absolute cycle count near the top of its range; layout 2 has no
+	 * timestamp, so the only fields that can reach it are a thread pointer
+	 * and an engineer's own marker argument.
 	 */
 	zassert_equal(outpost_put_varint(buf, sizeof(buf), 0xFFFFFFFFu), 5);
 	zassert_equal(buf[0], 0xFF);
@@ -79,7 +80,6 @@ ZTEST(outpost_wire, test_string_is_length_prefixed)
 ZTEST(outpost_wire, test_record_literal_bytes)
 {
 	struct outpost_slot rec = {
-		.cycles = 300,
 		.kind = OUTPOST_KIND_MARKER,
 		.a = 1,
 		.b = 128,
@@ -87,20 +87,30 @@ ZTEST(outpost_wire, test_record_literal_bytes)
 	uint8_t buf[OUTPOST_RECORD_MAX_BYTES];
 	size_t n = outpost_put_record(buf, sizeof(buf), &rec);
 
-	/* varint(300) | kind | varint(1) | varint(128) */
-	zassert_equal(n, 6);
-	zassert_equal(buf[0], 0xAC);
-	zassert_equal(buf[1], 0x02);
-	zassert_equal(buf[2], OUTPOST_KIND_MARKER);
+	/* kind | varint(1) | varint(128). No timestamp: layout 2 opens a
+	 * record with its kind (outpost_priv.h, "No clock on this side").
+	 */
+	zassert_equal(n, 4);
+	zassert_equal(buf[0], OUTPOST_KIND_MARKER);
+	zassert_equal(buf[1], 0x01);
+	zassert_equal(buf[2], 0x80);
 	zassert_equal(buf[3], 0x01);
-	zassert_equal(buf[4], 0x80);
-	zassert_equal(buf[5], 0x01);
+}
+
+/* The record shape is what sizes the ring, and a slot that outgrows
+ * OUTPOST_SLOT_BYTES makes every ring quietly larger than its Kconfig asked
+ * for — which is exactly what a 20-byte layout-1 slot did against this same
+ * 16. outpost_priv.h BUILD_ASSERTs it; this is the runtime half, so a reader
+ * of the test suite sees the constraint stated where the layout is pinned.
+ */
+ZTEST(outpost_wire, test_a_slot_is_exactly_the_size_the_ring_is_sized_by)
+{
+	zassert_equal(sizeof(struct outpost_slot), OUTPOST_SLOT_BYTES);
 }
 
 ZTEST(outpost_wire, test_record_worst_case_fits_its_bound)
 {
 	struct outpost_slot rec = {
-		.cycles = 0xFFFFFFFFu,
 		.kind = 0xFF,
 		.a = 0xFFFFFFFFu,
 		.b = 0xFFFFFFFFu,
@@ -177,17 +187,15 @@ ZTEST(outpost_ring, test_overflow_drops_the_newest_and_counts_it)
 	const uint32_t slots = outpost_ring_slots();
 	struct outpost_slot got;
 	uint32_t dropped;
-	uint32_t first;
-	uint32_t span;
 
-	zassert_false(outpost_ring_take_gap(&dropped, &first, &span),
+	zassert_false(outpost_ring_take_gap(&dropped),
 		      "a fresh ring should have no gap to report");
 
 	for (uint32_t i = 0; i < slots + 5; i++) {
 		outpost_ring_put(OUTPOST_KIND_MARKER, i, 0);
 	}
 
-	zassert_true(outpost_ring_take_gap(&dropped, &first, &span));
+	zassert_true(outpost_ring_take_gap(&dropped));
 	zassert_equal(dropped, 5, "expected exactly the overflow to be counted");
 
 	/* Drop-the-newest, never overwrite-oldest: the beginning of the burst
@@ -197,7 +205,7 @@ ZTEST(outpost_ring, test_overflow_drops_the_newest_and_counts_it)
 	zassert_equal(got.a, 0, "the oldest record was overwritten");
 
 	/* And the account is cleared by taking it. */
-	zassert_false(outpost_ring_take_gap(&dropped, &first, &span));
+	zassert_false(outpost_ring_take_gap(&dropped));
 }
 
 ZTEST(outpost_ring, test_ring_is_a_power_of_two_of_slots)
@@ -206,7 +214,11 @@ ZTEST(outpost_ring, test_ring_is_a_power_of_two_of_slots)
 
 	zassert_true(slots > 0);
 	zassert_equal(slots & (slots - 1), 0, "%u slots is not a power of two", slots);
-	zassert_true(slots * OUTPOST_SLOT_BYTES <= CONFIG_EMBARCH_OUTPOST_RING_BYTES);
+	/* An equality on the slot size, not just this bound, is what stops the
+	 * ring being bigger than its Kconfig: see
+	 * test_a_slot_is_exactly_the_size_the_ring_is_sized_by.
+	 */
+	zassert_true(slots * sizeof(struct outpost_slot) <= CONFIG_EMBARCH_OUTPOST_RING_BYTES);
 }
 
 ZTEST(outpost_ring, test_marker_ids_come_from_the_registration_list)
