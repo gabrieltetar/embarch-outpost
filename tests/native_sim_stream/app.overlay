@@ -1,0 +1,10 @@
+/*
+ * The board facts, declared in the consuming project — never in the module
+ * (design.md §3 decision 1). Here that is native_sim's PTY UART, which the
+ * build binds to the process's own stdout.
+ */
+/ {
+	chosen {
+		embarch,outpost-uart = &uart0;
+	};
+};

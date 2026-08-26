@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Assertions over a captured native_sim stream. Fails loudly, prints why."""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from collections import Counter
+
+trace_path, manifest_path, raw_path, module_dir = sys.argv[1:5]
+trace = json.load(open(trace_path, encoding="utf-8"))
+manifest = json.load(open(manifest_path, encoding="utf-8"))
+
+failures: list[str] = []
+
+
+def check(cond: bool, msg: str) -> None:
+    if not cond:
+        failures.append(msg)
+
+
+header = trace["header"]
+stats = trace["stats"]
+kinds = Counter(r["kind"] for r in trace["records"])
+
+check(header["record_layout_version"] == manifest["record_layout_version"],
+      f"layout version {header['record_layout_version']} != manifest "
+      f"{manifest['record_layout_version']}")
+check(header["build_id"] == manifest["build_id"],
+      f"stream build_id {header['build_id']!r} != manifest {manifest['build_id']!r}")
+check(header["cycles_per_sec"] > 0,
+      f"header reports cycles_per_sec={header['cycles_per_sec']}")
+check(not trace["manifest_refused"], "the matching manifest was refused")
+
+check(stats["bad_crc"] == 0, f"{stats['bad_crc']} frames failed their CRC")
+check(stats["bad_cobs"] == 0, f"{stats['bad_cobs']} frames failed COBS decoding")
+check(stats["bad_body"] == 0, f"{stats['bad_body']} frames had an undecodable body")
+check(stats["lost_frames"] == 0, f"{stats['lost_frames']} frames lost (seq gap)")
+check(stats["frames"] > 1, "only one frame in the whole stream")
+
+for kind in ("thread_switch_in", "thread_switch_out", "isr_enter", "isr_exit",
+             "idle", "marker", "gap"):
+    check(kinds[kind] > 0, f"no {kind} records in the stream")
+
+named_threads = {r["name"] for r in trace["records"]
+                 if r["kind"].startswith("thread_") and r["name"]}
+check("outpost_ping" in named_threads and "outpost_pong" in named_threads,
+      f"manifest did not resolve the test's K_THREAD_DEFINE threads: {sorted(named_threads)}")
+
+named_markers = {r["name"] for r in trace["records"] if r["kind"] == "marker" and r["name"]}
+check({"WORK_BEGIN", "WORK_END", "BURST"} <= named_markers,
+      f"manifest did not resolve every registered marker: {sorted(named_markers)}")
+
+check(sorted(manifest["markers"].values()) == ["BURST", "WORK_BEGIN", "WORK_END"],
+      f"manifest markers wrong: {manifest['markers']}")
+
+gaps = [r for r in trace["records"] if r["kind"] == "gap"]
+check(any(r["a"] > 0 for r in gaps), "a gap record was emitted but reported zero drops")
+
+# Cycles must be non-decreasing once unwrapped -- the ring publishes in
+# reservation order, so anything else means it reordered records. Gap records
+# are the documented exception: they are stamped when their losses started and
+# emitted when there was room to report them.
+cycles = [r["cycles"] for r in trace["records"] if r["kind"] != "gap"]
+check(all(b >= a for a, b in zip(cycles, cycles[1:])),
+      "non-gap records are not in non-decreasing cycle order")
+
+# And the unwrap must not have run away: this test lasts under a second at
+# 1 MHz, so nothing should be anywhere near a 2**32 wrap.
+check(max(cycles) < (1 << 32),
+      f"unwrapped cycles reached {max(cycles)}, which means a wrap was inferred "
+      "from a backwards step that was not one")
+
+# And a manifest that does not belong to this build must be refused, not
+# applied. This is the failure mode the whole build-ID mechanism exists for.
+bogus = dict(manifest)
+bogus["build_id"] = "not-this-build"
+bogus_path = manifest_path + ".bogus"
+json.dump(bogus, open(bogus_path, "w", encoding="utf-8"))
+out = subprocess.run(
+    [sys.executable, f"{module_dir}/scripts/decode_outpost.py",
+     "--manifest", bogus_path, "--json", raw_path],
+    capture_output=True, text=True, check=True)
+refused = json.loads(out.stdout)
+check(refused["manifest_refused"], "a mismatched manifest was NOT refused")
+check(all(r["name"] == "" for r in refused["records"]),
+      "a refused manifest still labelled records")
+
+if failures:
+    print("FAIL:")
+    for f in failures:
+        print(f"  - {f}")
+    sys.exit(1)
+
+print(f"PASS: {stats['frames']} frames, {len(trace['records'])} records, "
+      f"kinds={dict(kinds)}, "
+      f"{len(manifest['threads'])} threads / {len(manifest['isrs'])} ISRs in the manifest")

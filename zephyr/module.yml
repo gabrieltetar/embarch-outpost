@@ -1,0 +1,4 @@
+name: embarch-outpost
+build:
+  cmake: .
+  kconfig: Kconfig

@@ -1,0 +1,157 @@
+# embarch-outpost — MCU load tracing out a TX-only UART.
+#
+# Every symbol here is documented in ../embarch-doc/embarch-outpost/design.md
+# §5.3. Defaults are provisional: as of the first implementation pass no
+# outpost byte has ever crossed a real UART, so none of them is measured.
+
+menuconfig EMBARCH_OUTPOST
+	bool "EmbArch outpost MCU load tracing"
+	select TRACING
+	select TRACING_ISR
+	select THREAD_NAME
+	select CRC
+	help
+	  Compile the EmbArch outpost into this image: Zephyr's TRACING_USER
+	  hooks plus engineer-placed OUTPOST_EVT markers, drained out the UART
+	  named by the "embarch,outpost-uart" devicetree chosen node.
+
+	  Debug instrumentation. Turn it on in a debug overlay, not in prj.conf.
+
+	  Deliberately NOT `depends on SERIAL`, which looks right and creates a
+	  real Kconfig dependency loop: SERIAL is depended on by
+	  SHELL_BACKEND_SERIAL, which reaches LOG, which reaches
+	  SEGGER_SYSTEMVIEW inside the TRACING_FORMAT_CHOICE this symbol
+	  selects TRACING to enter. A missing serial driver is caught instead
+	  by the DEVICE_DT_GET on the chosen node, which cannot compile
+	  without one.
+
+	  One symbol turns on everything it needs — TRACING_USER on its own
+	  compiles out Zephyr's ring, format layer, drain thread, backends and
+	  drop counter, which is why the outpost owns its whole transport.
+
+if EMBARCH_OUTPOST
+
+config EMBARCH_OUTPOST_BAUD
+	int "Outpost UART baud (0 = use the chosen node's current-speed)"
+	default 0
+	help
+	  Non-zero calls uart_configure() at init, so the trace can run faster
+	  than a board overlay other things also depend on. 0 leaves the port
+	  exactly as devicetree configured it.
+
+config EMBARCH_OUTPOST_RING_BYTES
+	int "Record ring size in bytes"
+	default 4096
+	range 256 262144
+	help
+	  Rounded down to a power-of-two count of 16-byte slots. The direct
+	  trade against drop rate: when the ring is full a record is dropped,
+	  counted, and reported as an explicit gap record on the wire.
+
+config EMBARCH_OUTPOST_BATCH_BYTES
+	int "Bytes the drain thread accumulates before a UART transmit"
+	default 256
+	range 64 8192
+
+config EMBARCH_OUTPOST_THREAD_PRIORITY
+	int "Drain thread priority"
+	default 10
+	help
+	  A low (numerically high) preemptible priority: the drain thread must
+	  never outrank the work it is measuring.
+
+config EMBARCH_OUTPOST_THREAD_STACK_SIZE
+	int "Drain thread stack size"
+	default 1024
+
+config EMBARCH_OUTPOST_THREAD_WAIT_MS
+	int "Drain thread idle wait, milliseconds"
+	default 100
+	help
+	  How long the drain thread sleeps when the ring is empty. It does not
+	  sleep while records are available. Mirrors the shape of
+	  CONFIG_TRACING_THREAD_WAIT_THRESHOLD.
+
+config EMBARCH_OUTPOST_HEADER_INTERVAL_MS
+	int "How often the header frame repeats, milliseconds"
+	default 1000
+	help
+	  A host attaching mid-stream cannot decode until it has seen a header.
+	  0 emits the header once, at startup, and never again.
+
+config EMBARCH_OUTPOST_TRACE_THREADS
+	bool "Trace thread switches, creation and naming"
+	default y
+
+config EMBARCH_OUTPOST_TRACE_ISRS
+	bool "Trace ISR enter/exit"
+	default y
+
+config EMBARCH_OUTPOST_TRACE_IDLE
+	bool "Trace idle entry"
+	default y
+
+config EMBARCH_OUTPOST_TRACE_MARKERS
+	bool "Compile OUTPOST_EVT markers in"
+	default y
+	help
+	  n makes every OUTPOST_EVT() call site compile to nothing — but an
+	  unregistered marker ID is still a build error either way.
+
+config EMBARCH_OUTPOST_ISR_IDENTIFY
+	bool "Emit the active vector number with each ISR enter/exit"
+	depends on CPU_CORTEX_M && !ARM_CUSTOM_INTERRUPT_CONTROLLER
+	default y
+	help
+	  Reads the same expression Zephyr's own _isr_wrapper() evaluates three
+	  lines after calling the trace hook (__get_IPSR() - 16), so the number
+	  is exact rather than inferred. Off degrades to anonymous ISR
+	  enter/exit records.
+
+	  Cortex-M only, and unavailable under
+	  CONFIG_ARM_CUSTOM_INTERRUPT_CONTROLLER, which substitutes
+	  z_soc_irq_get_active() for IPSR in the wrapper — the dependency makes
+	  that build fall back to anonymous records rather than report a
+	  plausible wrong number.
+
+config EMBARCH_OUTPOST_OVERFLOW_BLOCK
+	bool "Block until the ring has space instead of dropping"
+	default n
+	help
+	  The only way to lose nothing, and it perturbs the timing being
+	  measured. For a deliberate high-fidelity run. Has no effect in
+	  interrupt context, which can never block: those records still drop.
+
+config EMBARCH_OUTPOST_UART_ASYNC
+	bool "Transmit with the asynchronous UART API"
+	depends on SERIAL_SUPPORT_ASYNC
+	default y
+	select UART_ASYNC_API
+	help
+	  uart_tx() (DMA-backed where the SoC has it). The fallback is a
+	  uart_poll_out() loop, which spins per byte inside the drain path and
+	  burns exactly the CPU time the trace is trying to measure — it exists
+	  so a port without async support still works, not because it is fine.
+
+config EMBARCH_OUTPOST_MARKER_HEADER
+	string "Header declaring this application's OUTPOST_MARKERS(X) list"
+	default ""
+	help
+	  A path resolvable on the include path, e.g. "app_outpost_markers.h".
+	  The header defines OUTPOST_MARKERS(X) as an X-macro list of marker
+	  names. That one declaration is simultaneously what makes
+	  OUTPOST_EVT(NAME, arg) compile and what puts NAME in the manifest;
+	  an unregistered ID is a build error, not a mystery integer on the
+	  host. Empty means this image registers no markers.
+
+config EMBARCH_OUTPOST_BUILD_ID_MAX
+	int "Maximum build-ID string length carried in the header frame"
+	default 64
+	range 16 128
+
+module = EMBARCH_OUTPOST
+module-str = embarch outpost
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # EMBARCH_OUTPOST
+

@@ -1,0 +1,9 @@
+/ {
+	chosen {
+		embarch,outpost-uart = &uart1;
+	};
+};
+
+&uart1 {
+	status = "okay";
+};
