@@ -258,6 +258,15 @@ bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *
 /** Total slots. Exposed for the tests. */
 uint32_t outpost_ring_slots(void);
 
+/** How many records are waiting, clamped to the ring's size.
+ *
+ *  A hint for sizing a batch (design.md §3 decision 20), never a fact: it can
+ *  be stale, and it can include a slot a preempted producer has reserved but
+ *  not published. Both errors make the drain thread wait *less* than it meant
+ *  to, which costs a slightly smaller frame and nothing else.
+ */
+uint32_t outpost_ring_pending(void);
+
 /* ---- wire (outpost_wire.c) ---- */
 
 /** Append a postcard varint. Returns bytes written, 0 if it would not fit. */

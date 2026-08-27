@@ -245,6 +245,28 @@ bool outpost_ring_get(struct outpost_slot *out)
 	return true;
 }
 
+uint32_t outpost_ring_pending(void)
+{
+	/* head - tail in reservation numbers, which is unsigned-correct across
+	 * the 32-bit wraparound the whole ring is built to survive. It can read
+	 * *above* RING_SLOTS: a producer that has reserved past a full ring
+	 * increments head and then drops its record, so head can run ahead of
+	 * what any consumer will ever see. Clamped, because the only caller uses
+	 * this to size a batch and a count larger than the ring would size it
+	 * for records that are not there.
+	 *
+	 * A hint, not a fact, and only ever used as one: it can be stale by the
+	 * time the caller reads it (a hook can fire in between) and it can count
+	 * a slot that is reserved but not yet published. Both errors are in the
+	 * direction of "the drain thread waits slightly less than it meant to",
+	 * which costs nothing — `build_records_frame()` still takes whatever is
+	 * actually published and no more.
+	 */
+	uint32_t pending = (uint32_t)atomic_get(&ring_head) - (uint32_t)atomic_get(&ring_tail);
+
+	return (pending > RING_SLOTS) ? RING_SLOTS : pending;
+}
+
 bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *cycle_span)
 {
 	/* Read the bounds before clearing the count, so a drop landing

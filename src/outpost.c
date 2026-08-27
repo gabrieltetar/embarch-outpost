@@ -55,6 +55,18 @@ static const struct device *const outpost_uart = DEVICE_DT_GET(OUTPOST_UART_NODE
 /* COBS worst case over (body + 4-byte CRC), plus the delimiter. */
 #define FRAME_BYTES (BATCH_BYTES + 4 + ((BATCH_BYTES + 4) / 254) + 3)
 
+/* How many records it takes to fill a batch, as a target for the fill wait
+ * (design.md §3 decision 20). Deliberately computed against the *worst-case*
+ * record size, so the target is reached before the batch could overflow and a
+ * frame is never cut short by having waited for one record too many. On a real
+ * trace a record averages well under the worst case, so a full batch holds more
+ * than this and `build_records_frame()` simply takes them all.
+ *
+ * The 3 accounts for the frame type, seq and count bytes the body carries ahead
+ * of the first record.
+ */
+#define BATCH_RECORDS_TARGET ((BATCH_BYTES - 3u) / OUTPOST_RECORD_MAX_BYTES)
+
 static uint8_t batch_buf[BATCH_BYTES];
 static uint8_t frame_buf[FRAME_BYTES];
 
@@ -345,6 +357,26 @@ static void drain_thread_fn(void *a, void *b, void *c)
 		if ((now - last_header) >= CONFIG_EMBARCH_OUTPOST_HEADER_INTERVAL_MS) {
 			last_header = now;
 			send_header();
+		}
+#endif
+
+#if CONFIG_EMBARCH_OUTPOST_FILL_WAIT_MS > 0
+		/* Let the batch fill before paying for a frame (design.md §3
+		 * decision 20).
+		 *
+		 * Without this the loop is a fixed point at the link rate: it
+		 * sends, blocks on the transmit, and then drains exactly the
+		 * records that arrived while it was blocked. Measured at
+		 * 460800 on a real DUT that settled at 3.3 records per frame
+		 * against a 256-byte batch, so ~9 bytes of framing rode on ~32
+		 * bytes of records and a fifth of the link carried nothing.
+		 *
+		 * One sleep, not a loop: two waits would double the latency
+		 * bound to buy a second-order saving, and a bounded wait that
+		 * is obviously bounded is worth more here than a full frame.
+		 */
+		if (outpost_ring_pending() < BATCH_RECORDS_TARGET) {
+			k_sleep(K_MSEC(CONFIG_EMBARCH_OUTPOST_FILL_WAIT_MS));
 		}
 #endif
 

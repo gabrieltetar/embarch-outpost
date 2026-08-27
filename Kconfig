@@ -66,6 +66,44 @@ config EMBARCH_OUTPOST_THREAD_STACK_SIZE
 	int "Drain thread stack size"
 	default 1024
 
+config EMBARCH_OUTPOST_FILL_WAIT_MS
+	int "How long the drain thread waits for a batch to fill, milliseconds"
+	default 10
+	range 0 1000
+	help
+	  Before building a frame, if the ring holds less than a full batch, the
+	  drain thread sleeps this long once and then sends whatever is there.
+	  0 restores the original behaviour: send immediately, always.
+
+	  **This is the single largest wire saving in the module, and it is pure
+	  framing overhead being removed.** Without it the drain loop is a fixed
+	  point at whatever the link rate is: it sends, waits for the transmit to
+	  complete, and drains exactly the records that arrived during that
+	  transmit. Measured on an dut_dev@7 at 460800 that settled at **3.3
+	  records per frame, 42.8 bytes**, of which ~9 bytes is frame type, seq,
+	  count, CRC-32, COBS stuffing and the delimiter — so roughly a fifth of
+	  the link was carrying no records at all, and the per-record cost was
+	  13.0 bytes against a body of about 9.5.
+
+	  The trade is **latency, and only latency**: a record can sit in the ring
+	  this long before it is transmitted. That costs nothing here, and it is
+	  worth being precise about why, because under record layout 2 it would
+	  have cost accuracy instead. A record carries its own DUT timestamp again
+	  (design.md §3 decisions 4, 17), so when it left the ring has no bearing
+	  on when the host says it happened. Layout 2's only clock was the frame's
+	  arrival time, and delaying a frame would have moved every event in it.
+	  **The clock fix is what makes this free.**
+
+	  It also costs nothing in resolution, for the same reason. Bigger frames
+	  used to mean a coarser trace; they no longer mean anything of the kind.
+
+	  Sized against EMBARCH_OUTPOST_RING_BYTES: the wait is pointless if the
+	  ring cannot hold a batch's worth of records, and harmful if the ring
+	  fills and drops during it. The default 10 ms against the default 4096-byte
+	  ring (128 slots) and 256-byte batch is comfortable at a few thousand
+	  records a second; a DUT that traces much faster than that wants a bigger
+	  ring, not a shorter wait.
+
 config EMBARCH_OUTPOST_THREAD_WAIT_MS
 	int "Drain thread idle wait, milliseconds"
 	default 100
