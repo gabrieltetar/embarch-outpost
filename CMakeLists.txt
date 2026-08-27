@@ -125,12 +125,43 @@ set_property(GLOBAL PROPERTY embarch_outpost_script
 set_property(GLOBAL PROPERTY embarch_outpost_manifest_path ${OUTPOST_MANIFEST})
 set_property(GLOBAL PROPERTY embarch_outpost_build_id "${OUTPOST_BUILD_ID}")
 set_property(GLOBAL PROPERTY embarch_outpost_version "${OUTPOST_VERSION}")
+set_property(GLOBAL PROPERTY embarch_outpost_cycles "${CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC}")
+
+# The record layout version the manifest declares has to be the one the
+# firmware puts in its header frame, and it was a literal here and a #define in
+# src/outpost_priv.h with nothing holding the two together — a drift that fails
+# as every manifest being refused against a firmware that is actually fine.
+# Read it out of the header, which is where the format is specified.
+file(READ ${CMAKE_CURRENT_LIST_DIR}/src/outpost_priv.h _outpost_priv_h)
+string(REGEX MATCH "#define[ 	]+OUTPOST_RECORD_LAYOUT_VERSION[ 	]+([0-9]+)"
+       _ "${_outpost_priv_h}")
+set(OUTPOST_LAYOUT_VERSION "${CMAKE_MATCH_1}")
+if("${OUTPOST_LAYOUT_VERSION}" STREQUAL "")
+  message(FATAL_ERROR
+    "embarch-outpost: could not read OUTPOST_RECORD_LAYOUT_VERSION out of "
+    "src/outpost_priv.h. Guessing it would produce manifests that are refused "
+    "against perfectly good firmware.")
+endif()
+set_property(GLOBAL PROPERTY embarch_outpost_layout "${OUTPOST_LAYOUT_VERSION}")
+
+# GPIO callback records carry a handler *function* pointer, and nothing at link
+# time can predict which functions those will be (gpio_init_callback() runs at
+# runtime). So the manifest has to carry the whole symbol table — but only for
+# an image that emits those records, because it is ~10x the rest of the file.
+if(CONFIG_EMBARCH_OUTPOST_TRACE_GPIO)
+  set_property(GLOBAL PROPERTY embarch_outpost_functions "--functions")
+else()
+  set_property(GLOBAL PROPERTY embarch_outpost_functions "")
+endif()
 
 function(embarch_outpost_manifest)
   get_property(_script GLOBAL PROPERTY embarch_outpost_script)
   get_property(_out GLOBAL PROPERTY embarch_outpost_manifest_path)
   get_property(_build_id GLOBAL PROPERTY embarch_outpost_build_id)
   get_property(_version GLOBAL PROPERTY embarch_outpost_version)
+  get_property(_cycles GLOBAL PROPERTY embarch_outpost_cycles)
+  get_property(_layout GLOBAL PROPERTY embarch_outpost_layout)
+  get_property(_functions GLOBAL PROPERTY embarch_outpost_functions)
 
   if(TARGET native_runner_executable)
     set(_target native_runner_executable)
@@ -146,7 +177,9 @@ function(embarch_outpost_manifest)
             --out ${_out}
             --build-id ${_build_id}
             --outpost-version ${_version}
-            --layout-version 2
+            --layout-version ${_layout}
+            --cycles-per-sec-config ${_cycles}
+            ${_functions}
     BYPRODUCTS ${_out}
     VERBATIM)
 endfunction()

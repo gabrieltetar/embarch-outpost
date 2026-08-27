@@ -17,6 +17,15 @@ produced it. Nothing here matches heuristically, and nothing is guessed:
            `arg` too, because on this suite's first real target most entries
            dispatch through a shared `nrfx_isr` trampoline whose argument is
            the driver handler that actually runs
+  devices  `__device_dts_ord_*` symbols, each read for the `const char *name`
+           that is the first member of `struct device`, so a device pointer on
+           the wire renders as the node it is
+  functions
+           every STT_FUNC symbol, address to name. Only with --functions,
+           because it is by far the largest table here (~4k entries, ~160 kB on
+           a real image) and only one record kind needs it: a GPIO callback's
+           handler pointer, which cannot be predicted at link time because
+           gpio_init_callback() runs at runtime
 
 Where a fact is not available, this emits nothing for it and records why in
 `notes`. It never fills a gap with a plausible answer — a trace that is
@@ -42,6 +51,9 @@ except ImportError:  # pragma: no cover - Zephyr's own build requires pyelftools
     )
     raise
 
+# 2 added the `devices` and `functions` tables. Additive: both are optional and
+# a reader that does not know them is unaffected, which is why no
+# record_layout_version moved with it.
 MANIFEST_SCHEMA = 2
 
 
@@ -251,6 +263,47 @@ def read_isrs(elf: Elf, notes: list[str]) -> tuple[dict[str, str], dict[str, str
     return out, args
 
 
+def read_devices(elf: Elf, notes: list[str]) -> dict[str, str]:
+    """`struct device`'s first member is `const char *name` (zephyr/device.h)."""
+    prefix = "__device_dts_ord_"
+    out: dict[str, str] = {}
+    unnamed = 0
+    for sym, (addr, _size) in elf.symbols.items():
+        if not sym.startswith(prefix):
+            continue
+        name_ptr = elf.word(addr)
+        name = elf.cstring(name_ptr) if name_ptr else None
+        if name is None:
+            # The ordinal alone is not a device name, and a manifest that
+            # printed it as one would be naming a device after a build-order
+            # artefact. Left out; counted.
+            unnamed += 1
+            continue
+        out[f"0x{addr:08x}"] = name
+    if not out:
+        notes.append(
+            "no __device_dts_ord_* symbols were readable: GPIO dispatch records carry "
+            "their raw port pointer and resolve to no name"
+        )
+    if unnamed:
+        notes.append(
+            f"{unnamed} device symbols had no readable name string and are omitted rather "
+            "than named after their devicetree ordinal"
+        )
+    return out
+
+
+def read_functions(elf: Elf) -> dict[str, str]:
+    """Every function symbol, address to name.
+
+    The one table here that is not a targeted read, and the only one a record
+    kind needs *because* it cannot be targeted: a GPIO callback's handler is
+    installed by gpio_init_callback() at runtime, so nothing at link time knows
+    which functions will appear on the wire. The honest answer is all of them.
+    """
+    return {f"0x{addr:08x}": name for addr, name in sorted(elf.func_by_addr.items())}
+
+
 def config_warnings(elf: Elf, notes: list[str]) -> None:
     """Build variants that defeat ISR resolution, named rather than assumed away."""
     if "z_shared_isr" in elf.symbols:
@@ -274,6 +327,15 @@ def main() -> int:
     ap.add_argument("--build-id", required=True)
     ap.add_argument("--outpost-version", required=True)
     ap.add_argument("--layout-version", type=int, required=True)
+    ap.add_argument("--cycles-per-sec-config", type=int, default=0)
+    ap.add_argument(
+        "--functions",
+        action="store_true",
+        help="also emit the full function symbol table, which GPIO callback records "
+             "need to resolve a handler pointer to a name. Off by default because it "
+             "is ~10x the rest of the manifest; CMakeLists.txt passes it exactly when "
+             "CONFIG_EMBARCH_OUTPOST_TRACE_GPIO is set.",
+    )
     args = ap.parse_args()
 
     elf = Elf(args.elf)
@@ -284,16 +346,25 @@ def main() -> int:
             "build_id": args.build_id,
             "outpost_version": args.outpost_version,
             "record_layout_version": args.layout_version,
-            # No cycle rate, in any form. Schema 1 carried
-            # CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC here "for reference"; layout 2
-            # took every timestamp off the wire (design.md §3 decision 4), so a
-            # rate in the manifest would describe nothing and read as though
-            # something on this side were still clocked.
+            # Present for reference only. The host uses the rate the firmware
+            # reports in its header frame, because this Kconfig legitimately
+            # defaults to 0 on targets that read their timer frequency at
+            # runtime (decision 4).
+            "cycles_per_sec_config": args.cycles_per_sec_config,
             "arch": elf.arch,
             "markers": read_markers(elf, notes),
             "threads": read_threads(elf, notes),
         }
         manifest["isrs"], manifest["isr_args"] = read_isrs(elf, notes)
+        manifest["devices"] = read_devices(elf, notes)
+        if args.functions:
+            manifest["functions"] = read_functions(elf)
+        else:
+            notes.append(
+                "the function symbol table was not emitted (--functions not passed, i.e. "
+                "CONFIG_EMBARCH_OUTPOST_TRACE_GPIO=n): any record whose `a` is a code "
+                "pointer renders as that pointer"
+            )
         config_warnings(elf, notes)
     finally:
         elf.close()
@@ -315,7 +386,8 @@ def main() -> int:
     print(
         f"embarch-outpost: {args.out} "
         f"({len(manifest['markers'])} markers, {len(manifest['threads'])} threads, "
-        f"{len(manifest['isrs'])} ISRs)"
+        f"{len(manifest['isrs'])} ISRs, {len(manifest['devices'])} devices, "
+        f"{len(manifest.get('functions', {}))} functions)"
     )
     return 0
 

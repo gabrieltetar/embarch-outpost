@@ -25,6 +25,11 @@
  * whose cost is a latency floor on unrelated interrupts distorts exactly the
  * thing it is measuring. The CAS loop costs the producer, not the system.
  *
+ * That argument is only worth anything if the whole emit path honours it, and
+ * for a while this one did not: the timestamp on the first line of
+ * outpost_ring_put() used to be k_cycle_get_32(), which on nRF disables
+ * interrupts twice. See outpost_time.h.
+ *
  * Overflow is drop-and-count, never overwrite-oldest: overwriting discards the
  * beginning of a busy burst and keeps the aftermath, which is backwards for a
  * continuous timeline. The account is handed to the drain thread as an
@@ -35,16 +40,13 @@
  */
 
 #include "outpost_priv.h"
+#include "outpost_time.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 
 /* CONFIG_EMBARCH_OUTPOST_RING_BYTES rounded down to a power-of-two slot count.
- * OUTPOST_SLOT_BYTES is BUILD_ASSERTed against the real slot size in
- * outpost_priv.h, so this division cannot silently under-report the RAM the
- * ring takes the way it did while a slot was 20 bytes against a 16-byte
- * constant.
  * A power of two is what makes `index & MASK` correct across the 32-bit
  * wraparound of `head`/`tail`, which is what makes the whole scheme survive a
  * long run.
@@ -79,45 +81,78 @@ static struct outpost_slot ring[RING_SLOTS];
 static atomic_t ring_head;
 static atomic_t ring_tail;
 
-/* Drop account: a count, and nothing else.
- *
- * Layout 1 also kept the cycle stamps of the first and last loss, to bound the
- * span they fell across. There is no clock on this side any more (design.md §3
- * decision 4), so the bound is the host's to draw: a gap record is always the
- * first record of the next frame, which puts the losses between two arrival
- * stamps.
+/* Drop account. `gap_dropped` is the authoritative count; the two cycle
+ * stamps bound the span it was lost across. `gap_first` is only written by
+ * the producer that takes the count from 0 to 1, so the span starts at the
+ * first loss rather than the last.
  */
 static atomic_t gap_dropped;
+static uint32_t gap_first;
+static uint32_t gap_last;
 
-/* A slot holding reservation `idx` publishes `idx + 1`, never `idx`.
+/* seq 0 means "reserved, but the producer has not finished writing the slot".
  *
- * That +1 is what makes the whole ring correct straight out of BSS, with no
+ * A slot holding reservation `idx` therefore publishes `idx + 1`, never `idx`,
+ * and that +1 is what makes the whole ring correct straight out of BSS with no
  * initialiser to run. Zero-initialised memory would otherwise read as
- * "reservation 0 is published" to a consumer sitting at tail 0, and it would
- * be wrong for exactly the window that matters: a producer that has CASed
- * head 0 -> 1 and been preempted before writing the slot. With the offset,
- * seq 0 is a value no reservation ever publishes.
+ * "reservation 0 is published" to a consumer sitting at tail 0, and it would be
+ * wrong for exactly the window that matters: a producer that has CASed head
+ * 0 -> 1 and been preempted before writing the slot.
  *
- * This matters more than it looks. The first hooks fire during kernel
- * startup, long before any SYS_INIT the outpost could register, so there is
- * no moment at which running an initialiser would be safe rather than a race
- * against live producers. The ring is correct before anyone has touched it.
+ * This matters more than it looks. The first hooks fire during kernel startup,
+ * long before any SYS_INIT the outpost could register, so there is no moment at
+ * which running an initialiser would be safe rather than a race against live
+ * producers. The ring is correct before anyone has touched it.
  */
-#define SEQ_FOR(idx) ((uint32_t)((idx) + 1u))
+#define SEQ_UNPUBLISHED 0u
+
+/* The one reservation the +1 alone gets wrong, and it fails permanently rather
+ * than transiently: idx == UINT32_MAX publishes UINT32_MAX + 1 == 0, which is
+ * the sentinel. The consumer parked at that tail reads its own published record
+ * as unpublished, stalls there forever, and every record after it drops for the
+ * life of the boot — the stream dies silently at one exact point in 2^32.
+ *
+ * So that single value publishes SEQ_WRAPPED instead. It aliases seq_for(0),
+ * and the alias is harmless because those two reservations are adjacent and
+ * never share a slot: UINT32_MAX & RING_MASK is RING_MASK, 0 & RING_MASK is 0,
+ * and RING_SLOTS >= 2 keeps them distinct. Nothing else can collide, because
+ * every other seq is still its own reservation number plus one.
+ */
+#define SEQ_WRAPPED (SEQ_UNPUBLISHED + 1u)
+
+BUILD_ASSERT(RING_SLOTS >= 2, "the seq wraparound alias needs at least two slots");
+
+static inline uint32_t seq_for(uint32_t idx)
+{
+	uint32_t seq = idx + 1u;
+
+	return (seq == SEQ_UNPUBLISHED) ? SEQ_WRAPPED : seq;
+}
 
 /* Not called during normal operation, and deliberately not from
  * outpost_init(): re-seeding a ring that hooks are already writing into is a
- * race, and BSS zero-init is already correct (see SEQ_FOR). This exists so a
- * test can start from a known state.
+ * race, and BSS zero-init is already correct (see SEQ_UNPUBLISHED). This exists
+ * so a test can start from a known state.
+ *
+ * `start` seeds head and tail. A test needs it to reach the 32-bit wraparound
+ * of the reservation counter in finitely many puts; nothing else has any
+ * business calling it with a non-zero value.
  */
-void outpost_ring_init(void)
+void outpost_ring_init_at(uint32_t start)
 {
 	for (uint32_t i = 0; i < RING_SLOTS; i++) {
-		atomic_set(&ring[i].seq, 0);
+		atomic_set(&ring[i].seq, (atomic_val_t)SEQ_UNPUBLISHED);
 	}
-	atomic_set(&ring_head, 0);
-	atomic_set(&ring_tail, 0);
+	atomic_set(&ring_head, (atomic_val_t)start);
+	atomic_set(&ring_tail, (atomic_val_t)start);
 	atomic_set(&gap_dropped, 0);
+	gap_first = 0;
+	gap_last = 0;
+}
+
+void outpost_ring_init(void)
+{
+	outpost_ring_init_at(0);
 }
 
 uint32_t outpost_ring_slots(void)
@@ -125,8 +160,19 @@ uint32_t outpost_ring_slots(void)
 	return RING_SLOTS;
 }
 
+static void note_drop(uint32_t cycles)
+{
+	atomic_val_t before = atomic_inc(&gap_dropped);
+
+	if (before == 0) {
+		gap_first = cycles;
+	}
+	gap_last = cycles;
+}
+
 void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 {
+	uint32_t cycles = outpost_cycles();
 	uint32_t head;
 
 	for (;;) {
@@ -149,7 +195,7 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 				continue;
 			}
 #endif
-			atomic_inc(&gap_dropped);
+			note_drop(cycles);
 			return;
 		}
 
@@ -160,6 +206,7 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 
 	struct outpost_slot *slot = &ring[head & RING_MASK];
 
+	slot->cycles = cycles;
 	slot->kind = kind;
 	slot->a = a;
 	slot->b = b;
@@ -167,7 +214,7 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 	/* Publish last. Everything above must be visible to the consumer before
 	 * the sequence that tells it to look.
 	 */
-	atomic_set(&slot->seq, (atomic_val_t)SEQ_FOR(head));
+	atomic_set(&slot->seq, (atomic_val_t)seq_for(head));
 }
 
 bool outpost_ring_get(struct outpost_slot *out)
@@ -181,7 +228,7 @@ bool outpost_ring_get(struct outpost_slot *out)
 
 	struct outpost_slot *slot = &ring[tail & RING_MASK];
 
-	if ((uint32_t)atomic_get(&slot->seq) != SEQ_FOR(tail)) {
+	if ((uint32_t)atomic_get(&slot->seq) != seq_for(tail)) {
 		/* Reserved but not yet published: a producer was preempted
 		 * mid-write. Stall here rather than skipping it — out-of-order
 		 * records would be worse than a few microseconds of latency.
@@ -189,6 +236,7 @@ bool outpost_ring_get(struct outpost_slot *out)
 		return false;
 	}
 
+	out->cycles = slot->cycles;
 	out->kind = slot->kind;
 	out->a = slot->a;
 	out->b = slot->b;
@@ -197,11 +245,15 @@ bool outpost_ring_get(struct outpost_slot *out)
 	return true;
 }
 
-bool outpost_ring_take_gap(uint32_t *dropped)
+bool outpost_ring_take_gap(uint32_t *dropped, uint32_t *first_cycles, uint32_t *cycle_span)
 {
-	/* A single atomic read-and-clear: a drop landing mid-call is counted in
-	 * the next gap record rather than being lost between the two.
+	/* Read the bounds before clearing the count, so a drop landing
+	 * mid-call is counted in the next gap record rather than producing a
+	 * span that starts after it. The span is a bound on where the losses
+	 * were, not an exact measure of them, and is documented as such.
 	 */
+	uint32_t first = gap_first;
+	uint32_t last = gap_last;
 	atomic_val_t count = atomic_clear(&gap_dropped);
 
 	if (count == 0) {
@@ -209,5 +261,7 @@ bool outpost_ring_take_gap(uint32_t *dropped)
 	}
 
 	*dropped = (uint32_t)count;
+	*first_cycles = first;
+	*cycle_span = last - first;
 	return true;
 }

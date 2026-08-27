@@ -11,7 +11,11 @@ the only one that catches a decoder that drifted while the encoder stayed put.
 done by hand on 2026-08-25, recorded as agreeing on all 848 rows, and then went
 un-rerun across the layout-1 -> layout-2 rework that rewrote *both* decoders. A
 one-off human act that has to be remembered is not a check. This one runs with
-the rest of the suite.
+the rest of the suite -- and it earned that immediately: layout 2 was withdrawn
+for layout 3, both decoders were rewritten a second time, and the `us` column
+came back with them. `round(x, 3)` here against `{:.3}` there disagrees on every
+value whose fraction is shorter than three digits, which is exactly the kind of
+drift no one finds by reading two files in two languages.
 
 Inputs are the committed fixtures in the two sibling repos, not a fresh capture:
 a fresh `native_sim` run has a different build ID every dirty tree, and the point

@@ -91,6 +91,20 @@ config EMBARCH_OUTPOST_TRACE_IDLE
 	bool "Trace idle entry"
 	default y
 
+config EMBARCH_OUTPOST_TRACE_GPIO
+	bool "Trace GPIO callback dispatch"
+	default y
+	help
+	  Record which GPIO callback handler ran inside a GPIOTE interrupt, and
+	  when it returned. The ISR records alone name the vector; these name the
+	  handler, which on a board where one line carries a sensor's data-ready
+	  is the part worth knowing.
+
+	  n does not remove any call from the image: gpio_fire_callbacks() makes
+	  them whenever CONFIG_TRACING is on, and without this they land in
+	  Zephyr's empty __weak definitions. What n saves is the records, which
+	  is the part that costs wire.
+
 config EMBARCH_OUTPOST_TRACE_MARKERS
 	bool "Compile OUTPOST_EVT markers in"
 	default y
@@ -132,6 +146,20 @@ config EMBARCH_OUTPOST_UART_ASYNC
 	  uart_poll_out() loop, which spins per byte inside the drain path and
 	  burns exactly the CPU time the trace is trying to measure — it exists
 	  so a port without async support still works, not because it is fine.
+
+config EMBARCH_OUTPOST_TX_TIMEOUT_MS
+	int "How long the drain thread waits for one UART transmit to complete"
+	depends on EMBARCH_OUTPOST_UART_ASYNC
+	default 1000
+	range 10 60000
+	help
+	  A stuck-transport backstop, not a pacing knob: it must comfortably
+	  exceed the wire time of one framed batch at the configured baud, which
+	  is ~275 ms for the 256-byte default at 9600 and proportionally less at
+	  every rate above it. On expiry the transfer is aborted and the frame is
+	  dropped; the drain thread carries on. The alternative is an unbounded
+	  wait, which on a build with no console fails as a trace that silently
+	  stops.
 
 config EMBARCH_OUTPOST_MARKER_HEADER
 	string "Header declaring this application's OUTPOST_MARKERS(X) list"
