@@ -10,6 +10,11 @@ Reads a raw stream on stdin or from a file; writes the decoded records as CSV,
 or as JSON with --json. With a manifest (--manifest), IDs are resolved to
 names — and a manifest whose build_id disagrees with the stream's header is
 **refused**, not applied, which is the whole point of there being a build ID.
+
+Manifests older than schema 2 carry no `devices` or `functions` table, so GPIO
+records from a newer firmware decode into structure and render with their
+pointers unnamed. That is the designed outcome, not a failure: the record shape
+is fixed so kinds can be appended without a layout change.
 """
 
 from __future__ import annotations
@@ -32,7 +37,17 @@ KIND_NAMES = {
     6: "thread_name",
     7: "marker",
     8: "gap",
+    9: "gpio_dispatch",
+    10: "gpio_callback_done",
 }
+
+# `a` for these is a port `struct device *` / a callback handler function
+# pointer, resolved out of the manifest's own ELF reads.
+KIND_THREAD = (0, 1, 5, 6)
+KIND_IRQ = (2, 3)
+KIND_MARKER = 7
+KIND_GPIO_DISPATCH = 9
+KIND_GPIO_CALLBACK_DONE = 10
 
 IRQ_UNKNOWN = 0xFFFFFFFF
 
@@ -155,6 +170,8 @@ def render(records, header, manifest, unwrap_state):
     threads = (manifest or {}).get("threads", {})
     isrs = (manifest or {}).get("isrs", {})
     isr_args = (manifest or {}).get("isr_args", {})
+    devices = (manifest or {}).get("devices", {})
+    functions = (manifest or {}).get("functions", {})
     rate = (header or {}).get("cycles_per_sec") or 0
 
     rows = []
@@ -179,11 +196,14 @@ def render(records, header, manifest, unwrap_state):
             unwrap_state["last"] = cycles
         absolute = unwrap_state["wraps"] * (1 << 32) + cycles
 
+        # An unknown kind renders as itself rather than failing the row: the
+        # record shape is fixed so that kinds can be appended, and a stream
+        # from a newer firmware stays readable here.
         name = KIND_NAMES.get(kind, f"unknown_{kind}")
         label = ""
-        if kind in (0, 1, 5, 6):
+        if kind in KIND_THREAD:
             label = threads.get(f"0x{rec['a']:08x}", "")
-        elif kind in (2, 3):
+        elif kind in KIND_IRQ:
             if rec["a"] != IRQ_UNKNOWN:
                 label = isrs.get(str(rec["a"]), "")
                 # A shared trampoline's own name says nothing about which
@@ -191,8 +211,15 @@ def render(records, header, manifest, unwrap_state):
                 inner = isr_args.get(str(rec["a"]))
                 if label and inner:
                     label = f"{label}({inner})"
-        elif kind == 7:
+        elif kind == KIND_MARKER:
             label = markers.get(str(rec["a"]), "")
+        elif kind == KIND_GPIO_DISPATCH:
+            label = devices.get(f"0x{rec['a']:08x}", "")
+        elif kind == KIND_GPIO_CALLBACK_DONE:
+            # Thumb function pointers carry bit 0 set; the manifest keys its
+            # symbol addresses with it masked off, and the two have to agree or
+            # every handler renders unnamed.
+            label = functions.get(f"0x{rec['a'] & ~1:08x}", "")
 
         rows.append({
             "cycles": absolute,

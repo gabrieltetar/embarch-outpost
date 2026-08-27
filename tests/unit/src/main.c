@@ -97,6 +97,45 @@ ZTEST(outpost_wire, test_record_literal_bytes)
 	zassert_equal(buf[5], 0x01);
 }
 
+/* The suite's both-languages rule applied to the two GPIO kinds: these exact
+ * bytes are asserted again, as a literal, by
+ * embarch-study-designer/src/outpost.rs. Produced by the firmware encoder here
+ * and decoded there — not round-tripped through either side's own inverse,
+ * which would agree with itself no matter what the other did.
+ */
+ZTEST(outpost_wire, test_gpio_records_literal_bytes)
+{
+	uint8_t buf[OUTPOST_RECORD_MAX_BYTES];
+
+	/* The port's `struct device *`, and a `b` of 0 because Zephyr's own hook
+	 * has already truncated the pin mask to 8 bits.
+	 */
+	struct outpost_slot dispatch = {
+		.cycles = 1000,
+		.kind = OUTPOST_KIND_GPIO_DISPATCH,
+		.a = 0x00071624,
+		.b = 0,
+	};
+	const uint8_t want_dispatch[] = {0xE8, 0x07, 0x09, 0xA4, 0xAC, 0x1C, 0x00};
+
+	zassert_equal(outpost_put_record(buf, sizeof(buf), &dispatch), sizeof(want_dispatch));
+	zassert_mem_equal(buf, want_dispatch, sizeof(want_dispatch));
+
+	/* A Thumb handler pointer keeps its low bit on the wire; masking it is
+	 * the host's job, against a symbol address that does not carry one.
+	 */
+	struct outpost_slot done = {
+		.cycles = 1040,
+		.kind = OUTPOST_KIND_GPIO_CALLBACK_DONE,
+		.a = 0x0000A4D9,
+		.b = 0x0008,
+	};
+	const uint8_t want_done[] = {0x90, 0x08, 0x0A, 0xD9, 0xC9, 0x02, 0x08};
+
+	zassert_equal(outpost_put_record(buf, sizeof(buf), &done), sizeof(want_done));
+	zassert_mem_equal(buf, want_done, sizeof(want_done));
+}
+
 ZTEST(outpost_wire, test_record_worst_case_fits_its_bound)
 {
 	struct outpost_slot rec = {
@@ -198,6 +237,37 @@ ZTEST(outpost_ring, test_overflow_drops_the_newest_and_counts_it)
 
 	/* And the account is cleared by taking it. */
 	zassert_false(outpost_ring_take_gap(&dropped, &first, &span));
+}
+
+/* The reservation counter is monotonic and 32-bit, so it wraps, and the slot
+ * publish sequence used to be reservation + 1 with no guard — which made the
+ * one reservation at UINT32_MAX publish 0, the value that means "not yet
+ * published". The consumer parked there read its own record as unpublished and
+ * stalled for the rest of the boot: every record after it dropped, silently, at
+ * one exact point in 2^32.
+ *
+ * Seeded a few slots short of the wrap so the whole thing is reachable in a
+ * handful of puts rather than 4 billion.
+ */
+ZTEST(outpost_ring, test_records_survive_the_reservation_counter_wrapping)
+{
+	const uint32_t before_wrap = 3;
+	const uint32_t after_wrap = 3;
+	struct outpost_slot got;
+
+	outpost_ring_init_at(UINT32_MAX - before_wrap);
+
+	for (uint32_t i = 0; i < before_wrap + after_wrap; i++) {
+		outpost_ring_put(OUTPOST_KIND_MARKER, i, 0);
+	}
+
+	for (uint32_t i = 0; i < before_wrap + after_wrap; i++) {
+		zassert_true(outpost_ring_get(&got),
+			     "the ring stalled at record %u, %s the counter wrapped", i,
+			     (i < before_wrap) ? "before" : "after");
+		zassert_equal(got.a, i, "record %u came back out of order", i);
+	}
+	zassert_false(outpost_ring_get(&got), "ring should be empty");
 }
 
 ZTEST(outpost_ring, test_ring_is_a_power_of_two_of_slots)

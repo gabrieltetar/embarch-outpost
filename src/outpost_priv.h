@@ -29,7 +29,9 @@
  * frame_type 0x01 -- Records. payload is a postcard `Vec<Record>`:
  *
  *   count: varint(u32), then `count` records, each:
- *       cycles: varint(u32)   -- k_cycle_get_32(), ABSOLUTE (decision 4)
+ *       cycles: varint(u32)   -- outpost_cycles(), ABSOLUTE (decision 4).
+ *                                Same value and units as k_cycle_get_32(), read
+ *                                without the locks it takes — see outpost_time.h
  *       kind:   u8            -- enum outpost_kind
  *       a:      varint(u32)
  *       b:      varint(u32)
@@ -67,7 +69,15 @@
 
 #include <zephyr/kernel.h>
 
-/** Bump on ANY change to the record or frame layout above. */
+/** Bump on ANY change to the record or frame layout above.
+ *
+ * Adding an `enum outpost_kind` value is not one: the record is a fixed
+ * {cycles, kind, a, b} precisely so kinds can be appended, an older host skips
+ * one it does not know, and a newer host reading an older stream simply never
+ * sees it. What tells a host whether a family is present at all is the header's
+ * `flags`, not this number. Bumping for an appended kind would refuse every
+ * manifest built before it for no decoding benefit.
+ */
 #define OUTPOST_RECORD_LAYOUT_VERSION 1
 
 #define OUTPOST_FRAME_RECORDS 0x01u
@@ -95,6 +105,31 @@ enum outpost_kind {
 	 * small backwards step — see the unwrap rule in scripts/decode_outpost.py.
 	 */
 	OUTPOST_KIND_GAP = 8,
+	/* The GPIO driver has begun walking one port's callback list, from that
+	 * port's own interrupt. a = the port's `struct device *`.
+	 *
+	 * b is 0 and NOT the pin mask, deliberately. Zephyr's hook declares its
+	 * mask parameter `gpio_pin_t` — a uint8_t — while gpio_fire_callbacks()
+	 * passes it a 32-bit `gpio_port_pins_t` (subsys/tracing/user/
+	 * tracing_user.h against include/zephyr/drivers/gpio/gpio_utils.h), so
+	 * every pin above 7 is already gone before this module is reached.
+	 * Emitting what survives would put a plausible wrong mask on the wire,
+	 * which is the outcome CONFIG_EMBARCH_OUTPOST_ISR_IDENTIFY's dependency
+	 * exists to avoid. Which pins a dispatch covered is recoverable from the
+	 * pin_mask on the OUTPOST_KIND_GPIO_CALLBACK_DONE records that follow.
+	 */
+	OUTPOST_KIND_GPIO_DISPATCH = 9,
+	/* One GPIO callback handler has RETURNED. a = the handler function
+	 * pointer, b = that callback's registered pin mask, full width.
+	 *
+	 * Read the name literally: Zephyr places this hook *after* cb->handler()
+	 * returns, not before it (gpio_utils.h). A handler's span therefore runs
+	 * from the record before it — the dispatch, or the previous handler's
+	 * completion — to this one. A host that reads it as an entry marker
+	 * attributes every handler's time to the wrong handler, and the trace
+	 * stays entirely readable while it does.
+	 */
+	OUTPOST_KIND_GPIO_CALLBACK_DONE = 10,
 };
 
 /** ISR identity unavailable on this build (CONFIG_EMBARCH_OUTPOST_ISR_IDENTIFY=n,
@@ -112,6 +147,7 @@ enum outpost_header_flag {
 	OUTPOST_FLAG_TRACE_MARKERS = BIT(3),
 	OUTPOST_FLAG_ISR_IDENTIFY = BIT(4),
 	OUTPOST_FLAG_OVERFLOW_BLOCK = BIT(5),
+	OUTPOST_FLAG_TRACE_GPIO = BIT(6),
 };
 
 /** One ring slot. 16 bytes: three 32-bit fields, a kind, and the publish
@@ -131,6 +167,12 @@ struct outpost_slot {
 /* ---- ring (outpost_ring.c) ---- */
 
 void outpost_ring_init(void);
+
+/** Reset the ring with head and tail seeded to `start`. Tests only — it exists
+ *  so the 32-bit wraparound of the reservation counter is reachable in finitely
+ *  many puts.
+ */
+void outpost_ring_init_at(uint32_t start);
 
 /** Emit one record. Any context, including an ISR. Never blocks unless
  *  CONFIG_EMBARCH_OUTPOST_OVERFLOW_BLOCK and the caller is a thread.

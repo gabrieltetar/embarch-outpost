@@ -118,6 +118,21 @@ size_t outpost_cobs_encode(const uint8_t *in, size_t len, uint8_t *out)
 	return write_index;
 }
 
+/* Static, not automatic, and the reason is the drain thread's stack.
+ *
+ * A batch-sized array here is CONFIG_EMBARCH_OUTPOST_BATCH_BYTES + 8 bytes of
+ * frame, and it is the only large object on that thread: at the default 256/
+ * 1024 it was a quarter of CONFIG_EMBARCH_OUTPOST_THREAD_STACK_SIZE, and it
+ * scaled 1:1 with the batch size — so raising the batch to cut the tracer's own
+ * frame rate silently walked the stack toward an overflow that reports as a
+ * reboot with no fault dump.
+ *
+ * Static costs the same RAM without spending it on a stack that has to be sized
+ * for the worst case anyway, and it is safe for the same reason batch_buf is:
+ * only the drain thread ever reaches outpost_frame().
+ */
+static uint8_t sealed[CONFIG_EMBARCH_OUTPOST_BATCH_BYTES + 8];
+
 size_t outpost_frame(const uint8_t *body, size_t body_len, uint8_t *out, size_t out_cap)
 {
 	/* The CRC covers the body only. Sealing before COBS rather than after
@@ -125,7 +140,6 @@ size_t outpost_frame(const uint8_t *body, size_t body_len, uint8_t *out, size_t 
 	 * the firmware sealed.
 	 */
 	uint32_t crc = crc32_ieee(body, body_len);
-	uint8_t sealed[CONFIG_EMBARCH_OUTPOST_BATCH_BYTES + 8];
 	size_t sealed_len = body_len + 4;
 
 	if (sealed_len > sizeof(sealed)) {

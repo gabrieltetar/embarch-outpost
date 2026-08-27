@@ -111,15 +111,43 @@ static int transport_init(void)
 
 static void transport_send(const uint8_t *buf, size_t len)
 {
+	/* Discard any completion left over from a transfer that timed out below,
+	 * so this send waits for its own UART_TX_DONE and not the previous
+	 * frame's. Without it one timeout desynchronises the semaphore from the
+	 * transfers for the rest of the boot: every later take returns on the
+	 * stale give, and every later uart_tx() then lands on a driver that is
+	 * still busy.
+	 */
+	k_sem_reset(&tx_done);
+
 	if (uart_tx(outpost_uart, buf, len, SYS_FOREVER_US) != 0) {
 		return;
 	}
+
 	/* The drain thread blocks here rather than double-buffering: records
 	 * keep accumulating in the ring meanwhile, and a full ring is already a
 	 * case with a defined, visible answer (a gap record). A second buffer
 	 * would buy throughput at the cost of a second failure mode.
+	 *
+	 * Bounded, not K_FOREVER. There is no flow control on this link and
+	 * uart_tx() was handed SYS_FOREVER_US, so the driver arms no timeout of
+	 * its own — nothing but this take stands between a completion that never
+	 * arrives and a drain thread parked for the rest of the boot. The
+	 * failure is silent by construction: the trace simply stops, on a build
+	 * that by design has no console to say so. Whether a stalled UARTE can
+	 * happen here is the wrong question to answer with an unbounded wait.
 	 */
-	k_sem_take(&tx_done, K_FOREVER);
+	if (k_sem_take(&tx_done, K_MSEC(CONFIG_EMBARCH_OUTPOST_TX_TIMEOUT_MS)) == 0) {
+		return;
+	}
+
+	/* Take the peripheral back and reap the UART_TX_ABORTED the abort
+	 * raises, so the next frame starts from a clean transfer. If even that
+	 * does not land, the k_sem_reset() above is what recovers the frame
+	 * after it.
+	 */
+	(void)uart_tx_abort(outpost_uart);
+	(void)k_sem_take(&tx_done, K_MSEC(CONFIG_EMBARCH_OUTPOST_TX_TIMEOUT_MS));
 }
 
 #else /* uart_poll_out fallback */
@@ -178,6 +206,9 @@ static uint8_t header_flags(void)
 #endif
 #if defined(CONFIG_EMBARCH_OUTPOST_OVERFLOW_BLOCK)
 	flags |= OUTPOST_FLAG_OVERFLOW_BLOCK;
+#endif
+#if defined(CONFIG_EMBARCH_OUTPOST_TRACE_GPIO)
+	flags |= OUTPOST_FLAG_TRACE_GPIO;
 #endif
 	return flags;
 }
