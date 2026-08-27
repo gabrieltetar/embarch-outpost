@@ -185,15 +185,26 @@ struct outpost_slot {
  * it is used for: outpost_ring.c divides CONFIG_EMBARCH_OUTPOST_RING_BYTES by
  * it to pick a slot count, and the unit test asserts the product fits.
  *
- * It said 16 until 2026-08-27, and it had never matched the struct: kind plus
- * its padding is a fourth word and `seq` is a fifth. The ring therefore took
- * 5120 bytes for a 4096-byte budget — 25% over, silently, with the one test
- * that checks the invariant measuring it through this same wrong constant and
- * so agreeing. Found by decoding a live ring over SWD, where a 16-byte stride
- * produced garbage and a 20-byte stride produced records.
+ * The number and the assert below are both *restorations*, and how they went
+ * missing is the point. Layout 2 (647bf29) removed `cycles` from the slot,
+ * which made 16 correct for the first time, and added this exact BUILD_ASSERT
+ * to hold it there. Layout 3 put `cycles` back — on a branch taken from
+ * d490fc3, *before* the assert existed — and the merge that brought the two
+ * together (dcd7cf5) resolved this file to the layout-3 side wholesale. The
+ * guard was not overruled or argued with; it was simply not in the tree the
+ * merge kept. From then on a slot was 20 bytes against a constant that said
+ * 16, so a 4096-byte ring budget quietly took 5120.
+ *
+ * Nothing caught it, including the unit test written to: it asserts
+ * `slots * OUTPOST_SLOT_BYTES <= CONFIG_EMBARCH_OUTPOST_RING_BYTES`, which
+ * measures the product through the same wrong constant and therefore agrees
+ * with it. Found instead by decoding a live ring out of a running nRF54L15
+ * over SWD, where a 16-byte stride produced garbage and a 20-byte stride
+ * produced records.
  *
  * A preprocessor #if cannot evaluate sizeof, and outpost_ring.c needs this in
- * one, so it stays a literal. The BUILD_ASSERT is what stops it lying again.
+ * one, so it stays a literal. The BUILD_ASSERT is what stops it lying again —
+ * and it only works if a merge that changes this struct keeps it.
  */
 #define OUTPOST_SLOT_BYTES 20
 
