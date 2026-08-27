@@ -77,8 +77,27 @@
  * sees it. What tells a host whether a family is present at all is the header's
  * `flags`, not this number. Bumping for an appended kind would refuse every
  * manifest built before it for no decoding benefit.
+ *
+ * **Why 3, when this wire is byte-for-byte what 1 was.**
+ *
+ * Layout 2 was a different answer to the same objection this module's
+ * `outpost_time.h` answers: it removed `cycles` from every record outright and
+ * made a host's frame-receipt time the only time a trace had. That shipped --
+ * embarch-core and embarch-api both decode 2 -- and it is being withdrawn,
+ * because reading the GRTC SYSCOUNTER's low word directly costs no locks and
+ * keeps per-record ordering the host cannot reconstruct from frame arrival.
+ *
+ * Going *back* to 1 was the obvious move and is the wrong one. A version byte
+ * exists so a host can say "I decode up to N", and reusing a number after a
+ * different wire has already worn a higher one makes that sentence unanswerable
+ * -- two mutually unreadable streams would both say `1`, distinguishable only
+ * by which build produced them, which is exactly the thing a version byte is
+ * for. So the wire returns to what 1 was and the number keeps going up. A
+ * layout-2-only host refuses a 3 loudly instead of reading each record's
+ * timestamp as its kind, which is the 941-plausible-wrong-rows failure
+ * decision 4 introduced the version byte to prevent in the first place.
  */
-#define OUTPOST_RECORD_LAYOUT_VERSION 1
+#define OUTPOST_RECORD_LAYOUT_VERSION 3
 
 #define OUTPOST_FRAME_RECORDS 0x01u
 #define OUTPOST_FRAME_HEADER  0x02u

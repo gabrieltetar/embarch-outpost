@@ -17,3 +17,9 @@ echo "=== unit (ztest, native_sim) ==="
 echo
 echo "=== end-to-end stream (native_sim) ==="
 BUILD_DIR="$BUILD_ROOT/native_sim_stream" "$HERE/native_sim_stream/run.sh"
+
+echo
+echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
+# Needs neither Zephyr nor west — it compares two host decoders over the
+# committed fixtures, and skips loudly if the sibling repos are not present.
+"${PYTHON:-python3}" "$HERE/cross_decoder.py"

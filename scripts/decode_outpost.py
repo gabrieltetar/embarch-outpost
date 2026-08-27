@@ -99,7 +99,7 @@ def take_string(buf: bytes, pos: int) -> tuple[str, int]:
 
 
 def decode_stream(raw: bytes):
-    """Yields ('header', dict) and ('records', seq, [record...]) in wire order.
+    """Yields ('header', dict) and ('records', frame_index, seq, [record...]).
 
     A frame that fails its CRC or its structure is reported and skipped, never
     partially applied: the stream is designed so a corrupt frame costs exactly
@@ -107,9 +107,14 @@ def decode_stream(raw: bytes):
     """
     stats = {"frames": 0, "bad_crc": 0, "bad_cobs": 0, "bad_body": 0, "lost_frames": 0}
     last_seq = None
+    frame_index = -1
     for chunk in raw.split(b"\x00"):
         if not chunk:
             continue
+        # Consumed before any validity check: a frame that fails its CRC below
+        # still burned an index while the receiver was stamping, so skipping
+        # one here would shift every arrival stamp after it.
+        frame_index += 1
         stats["frames"] += 1
         body = cobs_decode(chunk)
         if body is None or len(body) < 6:
@@ -156,7 +161,7 @@ def decode_stream(raw: bytes):
                     a, pos = take_varint(payload, pos)
                     b, pos = take_varint(payload, pos)
                     records.append({"cycles": cycles, "kind": kind, "a": a, "b": b})
-                yield "records", seq, records
+                yield "records", frame_index, seq, records
             else:
                 stats["bad_body"] += 1
         except (Truncated, IndexError):
@@ -164,7 +169,31 @@ def decode_stream(raw: bytes):
     yield "stats", stats
 
 
-def render(records, header, manifest, unwrap_state):
+def read_arrivals(path: str) -> dict[int, int]:
+    """`frame_index,rx_utc_ms` -> a lookup, keyed by frame index.
+
+    Frame index counts **non-empty delimiter-separated chunks** from the start
+    of the capture -- the same thing this decoder counts, and the same thing the
+    receiver counted while stamping. A frame that later fails its CRC still
+    consumed an index on both sides, which is what keeps the two in step.
+    """
+    stamps: dict[int, int] = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("frame_index"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 2:
+                continue
+            try:
+                stamps[int(parts[0])] = int(parts[1])
+            except ValueError:
+                continue
+    return stamps
+
+
+def render(records, frame_index, seq, header, manifest, unwrap_state, stamps):
     """One decoded row per record, with names resolved where the manifest has them."""
     markers = (manifest or {}).get("markers", {})
     threads = (manifest or {}).get("threads", {})
@@ -173,6 +202,10 @@ def render(records, header, manifest, unwrap_state):
     devices = (manifest or {}).get("devices", {})
     functions = (manifest or {}).get("functions", {})
     rate = (header or {}).get("cycles_per_sec") or 0
+    # The frame's arrival stamp, shared by every record it carried. Records
+    # inside a frame are ordered by `cycles` and not spread across the
+    # interval: that would be an interpolation nobody measured.
+    rx = stamps.get(frame_index, "") if stamps else ""
 
     rows = []
     for rec in records:
@@ -222,8 +255,17 @@ def render(records, header, manifest, unwrap_state):
             label = functions.get(f"0x{rec['a'] & ~1:08x}", "")
 
         rows.append({
+            "frame_index": frame_index,
+            "frame_seq": seq,
+            "rx_utc_ms": rx,
             "cycles": absolute,
-            "us": round(absolute * 1_000_000 / rate, 3) if rate else "",
+            # f"{...:.3f}", not round(): embarch-study-designer's renderer
+            # formats this column with `{:.3}` and always emits three decimals,
+            # so round() disagrees with it on every value with a shorter
+            # fraction (1234.5 vs 1234.500). tests/cross_decoder.py diffs the
+            # two decoders line by line and that difference is the only thing
+            # it ever caught -- which is the check working, not a nuisance.
+            "us": f"{absolute * 1_000_000 / rate:.3f}" if rate else "",
             "kind": name,
             "a": rec["a"],
             "b": rec["b"],
@@ -237,6 +279,11 @@ def main() -> int:
     ap.add_argument("stream", nargs="?", help="raw stream file; stdin if omitted")
     ap.add_argument("--manifest")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--arrival", help="frame_index,rx_utc_ms CSV from whoever received the "
+                                      "bytes. Without it rx_utc_ms is empty, which is a "
+                                      "trace that is ordered and untimed on the host's "
+                                      "clock -- a real answer, honestly distinguishable "
+                                      "from a timed one.")
     ap.add_argument("--allow-build-id-mismatch", action="store_true",
                     help="apply the manifest anyway. Renders a plausible, wrong trace; "
                          "exists only so a mismatch can be inspected.")
@@ -244,6 +291,7 @@ def main() -> int:
 
     raw = open(args.stream, "rb").read() if args.stream else sys.stdin.buffer.read()
     manifest = json.load(open(args.manifest, encoding="utf-8")) if args.manifest else None
+    stamps = read_arrivals(args.arrival) if args.arrival else None
 
     header = None
     all_rows = []
@@ -269,7 +317,9 @@ def main() -> int:
                         manifest = None
                         refused = True
         elif item[0] == "records":
-            all_rows.extend(render(item[2], header, manifest, unwrap_state))
+            all_rows.extend(
+                render(item[3], item[1], item[2], header, manifest, unwrap_state, stamps)
+            )
         elif item[0] == "stats":
             stats = item[1]
 
@@ -282,9 +332,10 @@ def main() -> int:
                    "records": all_rows}, sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
-        print("cycles,us,kind,a,b,name")
+        print("frame_index,frame_seq,rx_utc_ms,cycles,us,kind,a,b,name")
         for row in all_rows:
-            print(f"{row['cycles']},{row['us']},{row['kind']},{row['a']},{row['b']},{row['name']}")
+            print(f"{row['frame_index']},{row['frame_seq']},{row['rx_utc_ms']},"
+                  f"{row['cycles']},{row['us']},{row['kind']},{row['a']},{row['b']},{row['name']}")
         sys.stderr.write(f"embarch-outpost: {json.dumps(stats)}\n")
     return 0
 
