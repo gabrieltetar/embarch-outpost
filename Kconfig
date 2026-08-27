@@ -107,6 +107,42 @@ config EMBARCH_OUTPOST_TRACE_GPIO
 	  Zephyr's empty __weak definitions. What n saves is the records, which
 	  is the part that costs wire.
 
+config EMBARCH_OUTPOST_TRACE_SELF
+	bool "Trace the outpost's own drain thread and UART interrupt"
+	default n
+	help
+	  n (the default) drops every record whose subject is the outpost
+	  itself: a context switch into or out of the drain thread, and an
+	  ISR enter/exit on the vector of the UART named by the
+	  "embarch,outpost-uart" chosen node.
+
+	  **Default n because y saturates the link on an idle DUT, measured.**
+	  On a quiet nRF54L15 reference-dut the steady state is a closed loop of
+	  ten records per frame, and every one of the ten is caused by
+	  transmitting the previous frame: idle switches out, the drain thread
+	  switches in, the UARTE interrupt fires twice, the drain thread
+	  switches out, idle switches back in. Of the reference capture's 9205
+	  records, 50.4% were the drain thread plus its own UART's ISR and only
+	  18.6% were the application.
+
+	  The trade is stated on the wire, not implied: the header frame's
+	  OUTPOST_FLAG_TRACE_SELF bit is clear when this is n, so a host knows
+	  the trace is self-excluded rather than having to infer it from an
+	  absence. What a host sees in place of the drain thread's run is an
+	  interval no lane covers, which lands in the load summary's
+	  "unaccounted" total — on the reference capture that is 1.6% of the
+	  window.
+
+	  Two honest limits. The ISR half excludes the whole **vector**, so
+	  under CONFIG_SHARED_INTERRUPTS anything else sharing it goes too;
+	  and it needs the chosen node's IRQ number to equal the Cortex-M
+	  vector number, so it is compiled out under
+	  CONFIG_MULTI_LEVEL_INTERRUPTS rather than comparing against an
+	  encoded number that does not match __get_IPSR().
+
+	  y is the honest-but-expensive setting, and it is what you want when
+	  the thing being debugged *is* the outpost.
+
 config EMBARCH_OUTPOST_TRACE_MARKERS
 	bool "Compile OUTPOST_EVT markers in"
 	default y

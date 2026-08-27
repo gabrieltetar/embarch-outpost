@@ -210,6 +210,9 @@ static uint8_t header_flags(void)
 #if defined(CONFIG_EMBARCH_OUTPOST_TRACE_GPIO)
 	flags |= OUTPOST_FLAG_TRACE_GPIO;
 #endif
+#if defined(CONFIG_EMBARCH_OUTPOST_TRACE_SELF)
+	flags |= OUTPOST_FLAG_TRACE_SELF;
+#endif
 	return flags;
 }
 
@@ -356,7 +359,22 @@ static void drain_thread_fn(void *a, void *b, void *c)
 }
 
 K_THREAD_STACK_DEFINE(drain_stack, CONFIG_EMBARCH_OUTPOST_THREAD_STACK_SIZE);
-static struct k_thread drain_thread;
+
+/* Not `static`, and named for what it is rather than for where it lives: the
+ * trace hooks compare `k_current_get()` against `&outpost_drain_thread` to
+ * keep the instrument out of its own trace (design.md §3 decision 19), and a
+ * file-static cannot be reached from outpost_hooks.c. The declaration and the
+ * reasoning are in outpost_priv.h.
+ *
+ * A second, unlooked-for benefit of the name: this object is a plain
+ * `struct k_thread`, so the manifest generator's exact-address symbol match
+ * resolves it to `outpost_drain_thread` in the trace instead of to a bare
+ * pointer -- which is the one lane an engineer reading an outpost trace is
+ * most likely to want named. It was `drain_thread` when it was static, and
+ * that would have resolved too; the rename is so a symbol in someone else's
+ * ELF says whose it is.
+ */
+struct k_thread outpost_drain_thread;
 
 /* ---- init --------------------------------------------------------------- */
 
@@ -398,10 +416,10 @@ static int outpost_init(void)
 		return err;
 	}
 
-	k_thread_create(&drain_thread, drain_stack, K_THREAD_STACK_SIZEOF(drain_stack),
+	k_thread_create(&outpost_drain_thread, drain_stack, K_THREAD_STACK_SIZEOF(drain_stack),
 			drain_thread_fn, NULL, NULL, NULL,
 			CONFIG_EMBARCH_OUTPOST_THREAD_PRIORITY, 0, K_NO_WAIT);
-	k_thread_name_set(&drain_thread, "outpost");
+	k_thread_name_set(&outpost_drain_thread, "outpost");
 
 	LOG_INF("outpost up on %s: %u slots, %u-byte batches, build %s", outpost_uart->name,
 		outpost_ring_slots(), (unsigned int)BATCH_BYTES, outpost_build_id());

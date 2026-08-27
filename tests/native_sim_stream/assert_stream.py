@@ -74,6 +74,32 @@ check({"WORK_BEGIN", "WORK_END", "BURST"} <= named_markers,
 check(sorted(manifest["markers"].values()) == ["BURST", "WORK_BEGIN", "WORK_END"],
       f"manifest markers wrong: {manifest['markers']}")
 
+# ---- self-exclusion (design.md §3 decision 19) -----------------------------
+#
+# CONFIG_EMBARCH_OUTPOST_TRACE_SELF defaults n, and this test does not set it,
+# so the header must SAY the trace is self-excluded and the trace must actually
+# be. Both halves matter: a build that excluded itself without setting the flag
+# would hand a host a silently incomplete timeline, and a build that set the
+# flag without excluding anything would be the same lie the other way round.
+FLAG_TRACE_SELF = 1 << 7
+check(header["flags"] & FLAG_TRACE_SELF == 0,
+      f"header flags 0x{header['flags']:02x} claim the outpost traces itself, but "
+      "CONFIG_EMBARCH_OUTPOST_TRACE_SELF is not set in this test's prj.conf")
+
+# The drain thread names itself at runtime, so the manifest resolves it by
+# exact-address symbol match and its switch records would be plainly visible.
+drain_ptrs = {r["a"] for r in trace["records"] if r["kind"] == "thread_create"
+              and r["name"] in ("outpost_drain_thread", "outpost")}
+switch_ptrs = {r["a"] for r in trace["records"]
+               if r["kind"] in ("thread_switch_in", "thread_switch_out")}
+check(bool(drain_ptrs),
+      "no thread_create record identifies the outpost's own drain thread, so this check "
+      "cannot tell whether it was excluded — create/name records are deliberately NOT "
+      "self-excluded precisely so it can")
+check(not (drain_ptrs & switch_ptrs),
+      f"the outpost's own drain thread {sorted(hex(p) for p in drain_ptrs & switch_ptrs)} "
+      "has context-switch records in a self-excluded trace")
+
 gaps = [r for r in trace["records"] if r["kind"] == "gap"]
 check(any(r["a"] > 0 for r in gaps), "a gap record was emitted but reported zero drops")
 

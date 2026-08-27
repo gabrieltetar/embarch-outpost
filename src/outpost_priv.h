@@ -67,6 +67,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 
 /** Bump on ANY change to the record or frame layout above.
@@ -167,6 +168,20 @@ enum outpost_header_flag {
 	OUTPOST_FLAG_ISR_IDENTIFY = BIT(4),
 	OUTPOST_FLAG_OVERFLOW_BLOCK = BIT(5),
 	OUTPOST_FLAG_TRACE_GPIO = BIT(6),
+	/* Set only when CONFIG_EMBARCH_OUTPOST_TRACE_SELF=y, which is not the
+	 * default. **Clear means this trace is deliberately incomplete**: no
+	 * record describes the outpost's own drain thread or its own UART's
+	 * interrupt, so a host must not present the timeline as an account of
+	 * everything the CPU did. What it will see instead is intervals no lane
+	 * covers.
+	 *
+	 * This is the one flag whose *clear* state is the interesting one, and
+	 * it is on the wire for exactly that reason: an absence of records is
+	 * indistinguishable from an idle subject, and a host that had to infer
+	 * self-exclusion from "the drain thread never ran" would be inferring a
+	 * firmware build option from a measurement.
+	 */
+	OUTPOST_FLAG_TRACE_SELF = BIT(7),
 };
 
 /** One ring slot. 20 bytes: three 32-bit fields, a kind padded out to a word,
@@ -274,5 +289,48 @@ size_t outpost_frame(const uint8_t *body, size_t body_len, uint8_t *out, size_t 
 /** Build-ID string this image was compiled with (generated header). */
 const char *outpost_build_id(void);
 const char *outpost_version(void);
+
+/* ---- self-exclusion (design.md §3 decision 19) --------------------------
+ *
+ * Both of these are consumed by outpost_hooks.c, in the two hottest paths in
+ * the system, and both resolve to a compare against a compile-time constant.
+ */
+
+#if !defined(CONFIG_EMBARCH_OUTPOST_TRACE_SELF)
+
+/** The outpost's own drain thread.
+ *
+ * Deliberately not `static` in outpost.c, and deliberately a plain object
+ * rather than a pointer variable: the hooks compare `k_current_get()` against
+ * `&outpost_drain_thread`, which the linker resolves to an immediate, so the
+ * check costs a compare and a branch rather than a load.
+ *
+ * Verified against the Zephyr checkout rather than assumed, because the whole
+ * check depends on it: `z_thread_mark_switched_out()` is called from
+ * `kswap.h`'s `do_swap()` *before* `z_current_thread_set(new_thread)`, so
+ * `_current` is still the **outgoing** thread there, and
+ * `z_thread_mark_switched_in()` runs after it with `_current` set to the
+ * incoming one. One comparison therefore catches both directions.
+ */
+extern struct k_thread outpost_drain_thread;
+
+/** The Cortex-M vector number of the outpost's own UART, or a value no vector
+ *  can take when this build cannot know it.
+ *
+ *  `DT_IRQN` is the Zephyr IRQ number, and the hooks compare against
+ *  `__get_IPSR() - 16`, the raw NVIC line. Those are the same number only
+ *  without CONFIG_MULTI_LEVEL_INTERRUPTS, which encodes an aggregator's
+ *  children into the upper bits. So a multi-level build excludes nothing here
+ *  rather than excluding whichever vector the encoded number happens to
+ *  collide with — the same posture CONFIG_EMBARCH_OUTPOST_ISR_IDENTIFY's own
+ *  `depends on` takes toward a vector it cannot read exactly.
+ */
+#if defined(CONFIG_MULTI_LEVEL_INTERRUPTS) || !DT_IRQ_HAS_IDX(DT_CHOSEN(embarch_outpost_uart), 0)
+#define OUTPOST_SELF_IRQ OUTPOST_IRQ_UNKNOWN
+#else
+#define OUTPOST_SELF_IRQ ((uint32_t)DT_IRQN(DT_CHOSEN(embarch_outpost_uart)))
+#endif
+
+#endif /* !CONFIG_EMBARCH_OUTPOST_TRACE_SELF */
 
 #endif /* EMBARCH_OUTPOST_PRIV_H_ */

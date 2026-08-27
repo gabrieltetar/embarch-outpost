@@ -55,16 +55,70 @@ static inline uint32_t active_vector(void)
 }
 #endif
 
+/* ---- self-exclusion (design.md §3 decision 19) --------------------------
+ *
+ * Two predicates, both compiled out entirely when
+ * CONFIG_EMBARCH_OUTPOST_TRACE_SELF=y, so the honest-but-expensive setting
+ * costs nothing on the hot path either.
+ *
+ * The measurement that put these here: on a quiet nRF54L15 the steady state
+ * was a closed loop of ten records per frame, all ten caused by transmitting
+ * the previous frame, and 50.4% of the reference capture's records were the
+ * drain thread plus its own UART's ISR.
+ */
+#if defined(CONFIG_EMBARCH_OUTPOST_TRACE_SELF)
+static inline bool is_self_thread(struct k_thread *t)
+{
+	ARG_UNUSED(t);
+	return false;
+}
+static inline bool is_self_vector(uint32_t v)
+{
+	ARG_UNUSED(v);
+	return false;
+}
+#else
+static inline bool is_self_thread(struct k_thread *t)
+{
+	return t == &outpost_drain_thread;
+}
+static inline bool is_self_vector(uint32_t v)
+{
+	/* OUTPOST_SELF_IRQ is OUTPOST_IRQ_UNKNOWN on a build that cannot know
+	 * the number, and an ISR record carrying OUTPOST_IRQ_UNKNOWN means
+	 * "this build could not name the active vector" -- so the guard is
+	 * needed to stop excluding every anonymous ISR on such a build, which
+	 * would silently drop the one class of record that says the identity
+	 * was unavailable.
+	 */
+	return OUTPOST_SELF_IRQ != OUTPOST_IRQ_UNKNOWN && v == OUTPOST_SELF_IRQ;
+}
+#endif
+
 #if defined(CONFIG_EMBARCH_OUTPOST_TRACE_THREADS)
 
 void sys_trace_thread_switched_in_user(void)
 {
-	outpost_ring_put(OUTPOST_KIND_THREAD_SWITCH_IN, (uint32_t)(uintptr_t)k_current_get(), 0);
+	struct k_thread *self = k_current_get();
+
+	if (is_self_thread(self)) {
+		return;
+	}
+	outpost_ring_put(OUTPOST_KIND_THREAD_SWITCH_IN, (uint32_t)(uintptr_t)self, 0);
 }
 
 void sys_trace_thread_switched_out_user(void)
 {
-	outpost_ring_put(OUTPOST_KIND_THREAD_SWITCH_OUT, (uint32_t)(uintptr_t)k_current_get(), 0);
+	/* `_current` is still the OUTGOING thread here -- verified in the
+	 * Zephyr tree, see outpost_priv.h's note on outpost_drain_thread --
+	 * so the same comparison excludes both ends of the drain thread's run.
+	 */
+	struct k_thread *self = k_current_get();
+
+	if (is_self_thread(self)) {
+		return;
+	}
+	outpost_ring_put(OUTPOST_KIND_THREAD_SWITCH_OUT, (uint32_t)(uintptr_t)self, 0);
 }
 
 /* Thread create and name-set carry the pointer only. The name itself never
@@ -73,6 +127,13 @@ void sys_trace_thread_switched_out_user(void)
  * `static struct k_thread` has no distinguishing symbol and renders as a raw
  * pointer — stated in the design rather than papered over with runtime
  * name-registration records, which would put strings back on the wire.
+ */
+/* Create and name-set are NOT self-excluded, deliberately. They are two
+ * records for the whole capture rather than two per frame, so they cost
+ * nothing on the wire — and between them they are the only thing that names
+ * the excluded subject. A self-excluded trace that also hid the drain thread's
+ * existence would leave a host with unattributed intervals and nothing to
+ * attribute them to.
  */
 void sys_trace_thread_create_user(struct k_thread *thread)
 {
@@ -90,12 +151,22 @@ void sys_trace_thread_name_set_user(struct k_thread *thread)
 
 void sys_trace_isr_enter_user(void)
 {
-	outpost_ring_put(OUTPOST_KIND_ISR_ENTER, active_vector(), 0);
+	uint32_t vector = active_vector();
+
+	if (is_self_vector(vector)) {
+		return;
+	}
+	outpost_ring_put(OUTPOST_KIND_ISR_ENTER, vector, 0);
 }
 
 void sys_trace_isr_exit_user(void)
 {
-	outpost_ring_put(OUTPOST_KIND_ISR_EXIT, active_vector(), 0);
+	uint32_t vector = active_vector();
+
+	if (is_self_vector(vector)) {
+		return;
+	}
+	outpost_ring_put(OUTPOST_KIND_ISR_EXIT, vector, 0);
 }
 
 #endif /* CONFIG_EMBARCH_OUTPOST_TRACE_ISRS */
