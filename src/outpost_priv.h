@@ -169,8 +169,8 @@ enum outpost_header_flag {
 	OUTPOST_FLAG_TRACE_GPIO = BIT(6),
 };
 
-/** One ring slot. 16 bytes: three 32-bit fields, a kind, and the publish
- *  sequence that makes the ring lock-free (see outpost_ring.c).
+/** One ring slot. 20 bytes: three 32-bit fields, a kind padded out to a word,
+ *  and the publish sequence that makes the ring lock-free (see outpost_ring.c).
  */
 struct outpost_slot {
 	uint32_t cycles;
@@ -181,7 +181,26 @@ struct outpost_slot {
 	atomic_t seq;
 };
 
-#define OUTPOST_SLOT_BYTES 16
+/* Read this as "how much RAM one slot costs", because that is the only thing
+ * it is used for: outpost_ring.c divides CONFIG_EMBARCH_OUTPOST_RING_BYTES by
+ * it to pick a slot count, and the unit test asserts the product fits.
+ *
+ * It said 16 until 2026-08-27, and it had never matched the struct: kind plus
+ * its padding is a fourth word and `seq` is a fifth. The ring therefore took
+ * 5120 bytes for a 4096-byte budget — 25% over, silently, with the one test
+ * that checks the invariant measuring it through this same wrong constant and
+ * so agreeing. Found by decoding a live ring over SWD, where a 16-byte stride
+ * produced garbage and a 20-byte stride produced records.
+ *
+ * A preprocessor #if cannot evaluate sizeof, and outpost_ring.c needs this in
+ * one, so it stays a literal. The BUILD_ASSERT is what stops it lying again.
+ */
+#define OUTPOST_SLOT_BYTES 20
+
+BUILD_ASSERT(sizeof(struct outpost_slot) == OUTPOST_SLOT_BYTES,
+	     "OUTPOST_SLOT_BYTES must equal sizeof(struct outpost_slot): it is the "
+	     "per-slot RAM cost CONFIG_EMBARCH_OUTPOST_RING_BYTES is divided by, and "
+	     "understating it overruns that budget without any diagnostic");
 
 /* ---- ring (outpost_ring.c) ---- */
 

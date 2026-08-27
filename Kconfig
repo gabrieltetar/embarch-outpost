@@ -44,8 +44,10 @@ config EMBARCH_OUTPOST_RING_BYTES
 	default 4096
 	range 256 262144
 	help
-	  Rounded down to a power-of-two count of 16-byte slots. The direct
-	  trade against drop rate: when the ring is full a record is dropped,
+	  Rounded down to a power-of-two count of slots, each
+	  sizeof(struct outpost_slot) = 20 bytes, so the default 4096 buys 128
+	  slots and 2560 bytes rather than the whole budget. The direct trade
+	  against drop rate: when the ring is full a record is dropped,
 	  counted, and reported as an explicit gap record on the wire.
 
 config EMBARCH_OUTPOST_BATCH_BYTES
