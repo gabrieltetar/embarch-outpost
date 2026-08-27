@@ -91,15 +91,38 @@ void outpost_marker(uint32_t id, uint32_t arg);
  */
 #define OUTPOST_EVT(id, arg) outpost_marker(OUTPOST_MARKER_##id, (uint32_t)(arg))
 
-#else
+#elif defined(CONFIG_EMBARCH_OUTPOST)
 
-/* Markers compiled out. The ID must still resolve, so an unregistered name is
- * a build error whether or not markers are enabled — the failure mode this is
- * arranged to prevent does not depend on a Kconfig.
+/* Markers compiled out, module still in the build. The ID must still resolve,
+ * so an unregistered name is a build error whether or not markers are enabled
+ * — the failure mode this is arranged to prevent does not depend on a Kconfig.
  */
 #define OUTPOST_EVT(id, arg)                                                                       \
 	do {                                                                                       \
 		(void)OUTPOST_MARKER_##id;                                                         \
+		(void)(arg);                                                                       \
+	} while (0)
+
+#else
+
+/* The module is not in this build at all, so the application's registration
+ * header was never included and **no marker ID exists to check against**.
+ * `(void)OUTPOST_MARKER_##id` here would not enforce the name — it would fail
+ * to compile every call site in every non-tracing build, which is the whole
+ * of a shipping image.
+ *
+ * So the guarantee degrades in three tiers rather than two, and this is the
+ * weakest: the name is unchecked here and checked in both tiers above. That
+ * costs nothing real, because a marker's *reason to exist* is a build that
+ * traces — an engineer who adds one builds the tracing image to look at it,
+ * and that build is where a typo fails. What this tier buys is that call
+ * sites can live in ordinary driver and library code, unguarded, instead of
+ * every application wrapping each one in its own `#ifdef` and hand-rolling
+ * this same fallback (2026-08-27, placing the first real markers into a DUT's
+ * PPG pipeline).
+ */
+#define OUTPOST_EVT(id, arg)                                                                       \
+	do {                                                                                       \
 		(void)(arg);                                                                       \
 	} while (0)
 

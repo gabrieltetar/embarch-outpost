@@ -1,11 +1,37 @@
 # embarch-outpost — Zephyr module.
 # ../embarch-doc/embarch-outpost/design.md §5.
 
+# **Above the CONFIG_EMBARCH_OUTPOST guard, deliberately.** `outpost.h` is
+# written to be safe to include in an image that does not trace: its
+# OUTPOST_EVT() no-ops, and it keeps the `(void)OUTPOST_MARKER_##id` so an
+# unregistered marker name is a build error "whether or not markers are
+# enabled — the failure mode this is arranged to prevent does not depend on a
+# Kconfig", in that header's own words.
+#
+# That was defeated by this file, not by the header. With the include
+# directory below the early return, `#include <embarch/outpost.h>` did not
+# resolve *at all* in a build without the module, so the no-op path could
+# never be reached from an application and the compile-time name check could
+# never run in the build where it matters most — the shipping one. An
+# application wanting to instrument a hot path had to wrap every call site in
+# its own `#ifdef CONFIG_EMBARCH_OUTPOST` and hand-roll a fallback macro,
+# which is exactly the per-app guesswork the header exists to remove.
+#
+# Found 2026-08-27 placing the first real OUTPOST_EVT() markers into a DUT's
+# own firmware (a PPG pipeline's sample-drop sites), where the alternative was
+# editing four files in someone else's product code to add guards around a
+# header that already had the fallback built in.
+#
+# Costs an include directory in every build that has this module on its west
+# manifest. It adds no sources, no symbols and no code — only a header whose
+# entire content, with CONFIG_EMBARCH_OUTPOST unset, is an enum and two macros
+# that expand to nothing.
+zephyr_include_directories(include)
+
 if(NOT CONFIG_EMBARCH_OUTPOST)
   return()
 endif()
 
-zephyr_include_directories(include)
 zephyr_include_directories(${CMAKE_CURRENT_BINARY_DIR}/embarch-outpost)
 
 zephyr_library_named(embarch_outpost)

@@ -15,6 +15,12 @@ echo "=== unit (ztest, native_sim) ==="
 "$BUILD_ROOT/unit/zephyr/zephyr.exe"
 
 echo
+echo "=== module off: <embarch/outpost.h> still compiles (compile-only) ==="
+"$WEST" build -p always -b native_sim -d "$BUILD_ROOT/module_off" "$HERE/module_off" -- \
+    -DZEPHYR_EXTRA_MODULES="$MODULE"
+echo "PASS: header includes and OUTPOST_EVT compiles with CONFIG_EMBARCH_OUTPOST=n"
+
+echo
 echo "=== end-to-end stream (native_sim) ==="
 BUILD_DIR="$BUILD_ROOT/native_sim_stream" "$HERE/native_sim_stream/run.sh"
 
