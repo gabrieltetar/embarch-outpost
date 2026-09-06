@@ -30,5 +30,6 @@ an opinion about someone else's board would be asserting a fact it cannot know.
 - `src/` — ring, drain thread, UART transport, `TRACING_USER` hooks, wire encoder
 - `scripts/gen_outpost_manifest.py` — the post-link manifest generator (reads the ELF)
 - `scripts/decode_outpost.py` — reference host decoder, used by the native_sim test
+- `tests/decoder_unit.py` — host unit tests for that decoder; stdlib only, no west, no siblings
 - `tests/unit/` — ztest suite (ring, varint, COBS, CRC, frame shape)
 - `tests/native_sim_stream/` — the end-to-end test: real UART bytes out, decoded on the host

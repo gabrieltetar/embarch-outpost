@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
-# Every test this repo has. Needs ZEPHYR_BASE and WEST; neither `west` nor the
-# Zephyr SDK is reliably on a bare PATH.
+# Every test this repo has. The first leg is host Python and runs anywhere; the
+# three after it need ZEPHYR_BASE and WEST, since neither `west` nor the Zephyr
+# SDK is reliably on a bare PATH.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE="$(cd "$HERE/.." && pwd)"
+
+# Deliberately ahead of the west guard below. This leg needs no toolchain, no
+# ZEPHYR_BASE and no sibling repos, so putting it first is what makes the host
+# half of this repo *always* exercised rather than exercised where a Zephyr
+# checkout happens to exist.
+echo "=== decoder unit (host Python; no west, no ZEPHYR_BASE, no siblings) ==="
+"${PYTHON:-python3}" "$HERE/decoder_unit.py"
+echo
+
 WEST="${WEST:?set WEST to a west executable}"
 : "${ZEPHYR_BASE:?set ZEPHYR_BASE to a Zephyr checkout}"
 BUILD_ROOT="${BUILD_ROOT:-$HERE/build}"

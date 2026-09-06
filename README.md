@@ -132,11 +132,27 @@ refusals are the feature.
 ## Tests
 
 ```
+python3 tests/decoder_unit.py      # no toolchain needed; run this anywhere
+
 export ZEPHYR_BASE=/path/to/zephyr
 export WEST=/path/to/west          # west is often not on a bare PATH
 ./tests/run-all.sh
 ```
 
+`run-all.sh` runs the decoder unit tests **before** it demands `WEST`, so the
+host half is exercised on a bare checkout and only the three Zephyr legs need a
+toolchain.
+
+- `tests/decoder_unit.py` — stdlib `unittest` over synthesised bytes, and the
+  only check here with **no** external requirement: no west, no `ZEPHYR_BASE`,
+  no sibling repos, no fixtures. It pins the reference decoder's rules that a
+  rewrite silently undoes — COBS including the 0xFF run, a bad CRC costing one
+  frame while still consuming a `frame_index`, a truncated batch counting
+  `bad_body`, an unknown kind rendering as `unknown_N`, the wrap-vs-gap rule in
+  **both** directions, and `us` as three fixed decimals rather than `round()`.
+- `tests/cross_decoder.py` — this decoder against `embarch-core`'s, over one set
+  of committed bytes. Skips loudly when the sibling repos are absent, which is
+  why it does not cover the decoder on its own.
 - `tests/unit` — 15 ztests on `native_sim`: varint, COBS, record and frame
   layout pinned against **literal bytes** (not round-tripped through this
   encoder's own inverse — the format has three implementations and a round trip
