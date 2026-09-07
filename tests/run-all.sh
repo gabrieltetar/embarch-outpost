@@ -1,18 +1,42 @@
 #!/usr/bin/env bash
-# Every test this repo has. The first leg is host Python and runs anywhere; the
-# three after it need ZEPHYR_BASE and WEST, since neither `west` nor the Zephyr
-# SDK is reliably on a bare PATH.
+# Every test this repo has. The first two legs are host Python and run
+# anywhere; the three after them need ZEPHYR_BASE and WEST, since neither
+# `west` nor the Zephyr SDK is reliably on a bare PATH.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE="$(cd "$HERE/.." && pwd)"
 
-# Deliberately ahead of the west guard below. This leg needs no toolchain, no
-# ZEPHYR_BASE and no sibling repos, so putting it first is what makes the host
-# half of this repo *always* exercised rather than exercised where a Zephyr
-# checkout happens to exist.
+CROSS_DECODER_LOG="$(mktemp)"
+trap 'rm -f "$CROSS_DECODER_LOG"' EXIT
+CROSS_DECODER_RESULT="ran"
+
+# Both of the next two legs are deliberately ahead of the west guard below.
+# Neither needs a toolchain, ZEPHYR_BASE or (for the first) sibling repos, so
+# putting them first is what makes the host half of this repo *always*
+# exercised, rather than exercised only where a Zephyr checkout happens to
+# exist. This was itself the bug decisions/module.md decision 22 records: the
+# cross-decoder leg used to sit *after* the guard, so a bare checkout with no
+# WEST set never reached it at all, silently, and README.md's claim that "only
+# the three Zephyr legs need a toolchain" was false on this file's own
+# ordering.
 echo "=== decoder unit (host Python; no west, no ZEPHYR_BASE, no siblings) ==="
 "${PYTHON:-python3}" "$HERE/decoder_unit.py"
+echo
+
+echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
+# Needs neither Zephyr nor west — it compares two host decoders over the
+# committed fixtures, and skips loudly (exit 0) if the sibling repos are not
+# present. See decisions/module.md decision 22 for why a skip here stays a
+# skip rather than becoming a failure, and the final summary below for how a
+# skipped run is still visible in the exit summary rather than only in a line
+# of mid-stream stdout.
+"${PYTHON:-python3}" "$HERE/cross_decoder.py" | tee "$CROSS_DECODER_LOG"
+if grep -q '^SKIP:' "$CROSS_DECODER_LOG"; then
+    CROSS_DECODER_RESULT="SKIPPED (sibling-repo fixtures not present)"
+else
+    CROSS_DECODER_RESULT="ran"
+fi
 echo
 
 WEST="${WEST:?set WEST to a west executable}"
@@ -35,7 +59,15 @@ echo "=== end-to-end stream (native_sim) ==="
 BUILD_DIR="$BUILD_ROOT/native_sim_stream" "$HERE/native_sim_stream/run.sh"
 
 echo
-echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
-# Needs neither Zephyr nor west — it compares two host decoders over the
-# committed fixtures, and skips loudly if the sibling repos are not present.
-"${PYTHON:-python3}" "$HERE/cross_decoder.py"
+echo "=== summary ==="
+echo "decoder unit:    ran"
+echo "cross-decoder:   $CROSS_DECODER_RESULT"
+echo "unit (ztest):    ran"
+echo "module off:      ran"
+echo "e2e stream:      ran"
+if [[ "$CROSS_DECODER_RESULT" != "ran" ]]; then
+    echo
+    echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
+    echo "against embarch-core/embarch-ui's committed fixtures. See decisions/module.md"
+    echo "decision 22 for why that stays a skip rather than a failure."
+fi

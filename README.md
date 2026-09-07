@@ -139,20 +139,25 @@ export WEST=/path/to/west          # west is often not on a bare PATH
 ./tests/run-all.sh
 ```
 
-`run-all.sh` runs the decoder unit tests **before** it demands `WEST`, so the
-host half is exercised on a bare checkout and only the three Zephyr legs need a
-toolchain.
+`run-all.sh` runs the decoder unit tests and the cross-decoder check **before**
+it demands `WEST`, so the toolchain-free half of this repo is exercised on a
+bare checkout and only the three Zephyr legs need a toolchain. A skipped
+cross-decoder is called out again in the script's final summary, not only in
+the `SKIP:` line where it happened — see `decisions/module.md` decision 22.
 
 - `tests/decoder_unit.py` — stdlib `unittest` over synthesised bytes, and the
-  only check here with **no** external requirement: no west, no `ZEPHYR_BASE`,
-  no sibling repos, no fixtures. It pins the reference decoder's rules that a
-  rewrite silently undoes — COBS including the 0xFF run, a bad CRC costing one
-  frame while still consuming a `frame_index`, a truncated batch counting
-  `bad_body`, an unknown kind rendering as `unknown_N`, the wrap-vs-gap rule in
-  **both** directions, and `us` as three fixed decimals rather than `round()`.
+  only check here with **no** external requirement at all: no west, no
+  `ZEPHYR_BASE`, no sibling repos, no fixtures. It pins the reference decoder's
+  rules that a rewrite silently undoes — COBS including the 0xFF run, a bad CRC
+  costing one frame while still consuming a `frame_index`, a truncated batch
+  counting `bad_body`, an unknown kind rendering as `unknown_N`, the wrap-vs-gap
+  rule in **both** directions, and `us` as three fixed decimals rather than
+  `round()`.
 - `tests/cross_decoder.py` — this decoder against `embarch-core`'s, over one set
-  of committed bytes. Skips loudly when the sibling repos are absent, which is
-  why it does not cover the decoder on its own.
+  of committed bytes. Needs no toolchain either, but does need the two sibling
+  repos' committed fixtures, and skips loudly (never fails) when they are
+  absent — which is why it does not cover the decoder on its own, and why it
+  runs as its own leg rather than folding into `decoder_unit.py`.
 - `tests/unit` — 15 ztests on `native_sim`: varint, COBS, record and frame
   layout pinned against **literal bytes** (not round-tripped through this
   encoder's own inverse — the format has three implementations and a round trip
