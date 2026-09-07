@@ -8,8 +8,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE="$(cd "$HERE/.." && pwd)"
 
 CROSS_DECODER_LOG="$(mktemp)"
-trap 'rm -f "$CROSS_DECODER_LOG"' EXIT
 CROSS_DECODER_RESULT="ran"
+SUMMARY_PRINTED="no"
+
+# The skip note has to survive an exit that never reaches the summary block,
+# because the commonest such exit is the one this file's whole ordering fix is
+# about: a bare checkout with no WEST set runs both host legs and then stops at
+# the guard below, forty lines above the summary. Printing the note from the
+# EXIT trap instead of only from the summary is what makes "a run that checked
+# nothing against the sibling fixtures says so at the end" true on *every* exit
+# path rather than only on a full toolchain run.
+cross_decoder_note() {
+    rm -f "$CROSS_DECODER_LOG"
+    if [[ "$SUMMARY_PRINTED" == "no" && "$CROSS_DECODER_RESULT" != "ran" ]]; then
+        echo
+        echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
+        echo "against embarch-core/embarch-ui's committed fixtures. See decisions/module.md"
+        echo "decision 22 for why that stays a skip rather than a failure."
+    fi
+}
+trap cross_decoder_note EXIT
 
 # Both of the next two legs are deliberately ahead of the west guard below.
 # Neither needs a toolchain, ZEPHYR_BASE or (for the first) sibling repos, so
@@ -59,6 +77,7 @@ echo "=== end-to-end stream (native_sim) ==="
 BUILD_DIR="$BUILD_ROOT/native_sim_stream" "$HERE/native_sim_stream/run.sh"
 
 echo
+SUMMARY_PRINTED="yes"
 echo "=== summary ==="
 echo "decoder unit:    ran"
 echo "cross-decoder:   $CROSS_DECODER_RESULT"
