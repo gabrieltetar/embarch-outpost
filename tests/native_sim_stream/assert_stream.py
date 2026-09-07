@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
 
 trace_path, manifest_path, raw_path, module_dir = sys.argv[1:5]
+
+# FLAG_TRACE_SELF used to be hand-written here as `1 << 7`, a fourth
+# independent copy of a bit `src/outpost_priv.h` defines and
+# `scripts/decode_outpost.py` now names once. Importing it is what
+# `tests/vocab_check.py` and decision 23 (decisions/wire.md) are about.
+sys.path.insert(0, os.path.join(module_dir, "scripts"))
+from decode_outpost import FLAG_TRACE_SELF  # noqa: E402
 trace = json.load(open(trace_path, encoding="utf-8"))
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 
@@ -81,7 +89,6 @@ check(sorted(manifest["markers"].values()) == ["BURST", "WORK_BEGIN", "WORK_END"
 # be. Both halves matter: a build that excluded itself without setting the flag
 # would hand a host a silently incomplete timeline, and a build that set the
 # flag without excluding anything would be the same lie the other way round.
-FLAG_TRACE_SELF = 1 << 7
 check(header["flags"] & FLAG_TRACE_SELF == 0,
       f"header flags 0x{header['flags']:02x} claim the outpost traces itself, but "
       "CONFIG_EMBARCH_OUTPOST_TRACE_SELF is not set in this test's prj.conf")

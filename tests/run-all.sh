@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every test this repo has. The first two legs are host Python and run
+# Every test this repo has. The first three legs are host Python and run
 # anywhere; the three after them need ZEPHYR_BASE and WEST, since neither
 # `west` nor the Zephyr SDK is reliably on a bare PATH.
 set -euo pipefail
@@ -29,17 +29,26 @@ cross_decoder_note() {
 }
 trap cross_decoder_note EXIT
 
-# Both of the next two legs are deliberately ahead of the west guard below.
-# Neither needs a toolchain, ZEPHYR_BASE or (for the first) sibling repos, so
-# putting them first is what makes the host half of this repo *always*
-# exercised, rather than exercised only where a Zephyr checkout happens to
-# exist. This was itself the bug decisions/module.md decision 22 records: the
-# cross-decoder leg used to sit *after* the guard, so a bare checkout with no
-# WEST set never reached it at all, silently, and README.md's claim that "only
-# the three Zephyr legs need a toolchain" was false on this file's own
-# ordering.
+# All three of the next legs are deliberately ahead of the west guard below.
+# None needs a toolchain or ZEPHYR_BASE, and only cross-decoder needs sibling
+# repos (and skips loudly without them), so putting them first is what makes
+# the host half of this repo *always* exercised, rather than exercised only
+# where a Zephyr checkout happens to exist. This was itself the bug
+# decisions/module.md decision 22 records: the cross-decoder leg used to sit
+# *after* the guard, so a bare checkout with no WEST set never reached it at
+# all, silently, and README.md's claim that "only the three Zephyr legs need a
+# toolchain" was false on this file's own ordering. vocab_check.py (decision
+# 23) joined the host-only legs the same way, for the same reason: it needs
+# neither west nor ZEPHYR_BASE, only text it can read.
 echo "=== decoder unit (host Python; no west, no ZEPHYR_BASE, no siblings) ==="
 "${PYTHON:-python3}" "$HERE/decoder_unit.py"
+echo
+
+echo "=== vocab check (record kinds and header flags vs src/outpost_priv.h) ==="
+# Host Python only; reads the sibling embarch-study-designer/src/outpost.rs if
+# it is checked out beside this repo and skips that half loudly otherwise
+# (decisions/wire.md decision 23). Never needs west or ZEPHYR_BASE.
+"${PYTHON:-python3}" "$HERE/vocab_check.py"
 echo
 
 echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
@@ -80,6 +89,7 @@ echo
 SUMMARY_PRINTED="yes"
 echo "=== summary ==="
 echo "decoder unit:    ran"
+echo "vocab check:     ran"
 echo "cross-decoder:   $CROSS_DECODER_RESULT"
 echo "unit (ztest):    ran"
 echo "module off:      ran"

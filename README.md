@@ -139,11 +139,12 @@ export WEST=/path/to/west          # west is often not on a bare PATH
 ./tests/run-all.sh
 ```
 
-`run-all.sh` runs the decoder unit tests and the cross-decoder check **before**
-it demands `WEST`, so the toolchain-free half of this repo is exercised on a
-bare checkout and only the three Zephyr legs need a toolchain. A skipped
-cross-decoder is called out again in the script's final summary, not only in
-the `SKIP:` line where it happened — see `decisions/module.md` decision 22.
+`run-all.sh` runs the decoder unit tests, the vocabulary check, and the
+cross-decoder check **before** it demands `WEST`, so the toolchain-free half of
+this repo is exercised on a bare checkout and only the three Zephyr legs need a
+toolchain. A skipped cross-decoder is called out again in the script's final
+summary, not only in the `SKIP:` line where it happened — see
+`decisions/module.md` decision 22.
 
 - `tests/decoder_unit.py` — stdlib `unittest` over synthesised bytes, and the
   only check here with **no** external requirement at all: no west, no
@@ -153,6 +154,12 @@ the `SKIP:` line where it happened — see `decisions/module.md` decision 22.
   counting `bad_body`, an unknown kind rendering as `unknown_N`, the wrap-vs-gap
   rule in **both** directions, and `us` as three fixed decimals rather than
   `round()`.
+- `tests/vocab_check.py` — diffs the record-kind and header-flag vocabulary in
+  `src/outpost_priv.h` (the producer, and the definition) against
+  `scripts/decode_outpost.py`'s tables, and — read-only, skipped loudly if the
+  sibling is not checked out beside this repo — against
+  `embarch-study-designer/src/outpost.rs`'s `RecordKind` and `HeaderFlags`.
+  Needs no toolchain. See `decisions/wire.md` decision 23.
 - `tests/cross_decoder.py` — this decoder against `embarch-core`'s, over one set
   of committed bytes. Needs no toolchain either, but does need the two sibling
   repos' committed fixtures, and skips loudly (never fails) when they are

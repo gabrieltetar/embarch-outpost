@@ -51,6 +51,37 @@ KIND_GPIO_CALLBACK_DONE = 10
 
 IRQ_UNKNOWN = 0xFFFFFFFF
 
+# Header `flags` bit positions (src/outpost_priv.h `enum outpost_header_flag`).
+# Nothing in this file decodes a flag into a column -- no CLI output uses a
+# flag name -- but the bits are defined exactly once, here, rather than
+# hand-copied wherever a caller needs one. `tests/native_sim_stream/
+# assert_stream.py` used to hand-write `FLAG_TRACE_SELF = 1 << 7` as a fourth,
+# independent copy of a bit `outpost_priv.h` already defines; it now imports
+# this constant instead. `tests/vocab_check.py` diffs FLAG_NAMES (and
+# KIND_NAMES above) against `src/outpost_priv.h` directly, so a bit added
+# there and not mirrored here fails a check rather than going unnoticed the
+# way TRACE_GPIO briefly did on the Rust side (embarch-study-designer
+# decision noted at `src/outpost.rs:225-227`).
+FLAG_TRACE_THREADS = 1 << 0
+FLAG_TRACE_ISRS = 1 << 1
+FLAG_TRACE_IDLE = 1 << 2
+FLAG_TRACE_MARKERS = 1 << 3
+FLAG_ISR_IDENTIFY = 1 << 4
+FLAG_OVERFLOW_BLOCK = 1 << 5
+FLAG_TRACE_GPIO = 1 << 6
+FLAG_TRACE_SELF = 1 << 7
+
+FLAG_NAMES = {
+    FLAG_TRACE_THREADS: "trace_threads",
+    FLAG_TRACE_ISRS: "trace_isrs",
+    FLAG_TRACE_IDLE: "trace_idle",
+    FLAG_TRACE_MARKERS: "trace_markers",
+    FLAG_ISR_IDENTIFY: "isr_identify",
+    FLAG_OVERFLOW_BLOCK: "overflow_block",
+    FLAG_TRACE_GPIO: "trace_gpio",
+    FLAG_TRACE_SELF: "trace_self",
+}
+
 
 class Truncated(Exception):
     pass
