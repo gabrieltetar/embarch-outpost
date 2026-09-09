@@ -189,5 +189,6 @@ summary, not only in the `SKIP:` line where it happened — see
 Built, `native_sim`-verified end to end, and built for the real nRF54L15
 reference-dut target with its manifest resolving that image's real threads and
 ISRs. **No outpost byte has ever crossed a real UART.** Every wire constant in
-`Kconfig` is a provisional default nobody has measured, and the instrumentation
-overhead is deliberately uncharacterised — see `spec.md` §4.
+`Kconfig` is a provisional default nobody has measured. The instrumentation
+overhead has been measured, though — 1.6% of the DUT's own CPU (misread as
+78.1% on the host clock) — see `spec.md` §4.
