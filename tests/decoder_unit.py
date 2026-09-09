@@ -512,5 +512,85 @@ class TestArrivalJoinVerification(unittest.TestCase):
             self.assertIn("missing or short", result.stderr)
 
 
+class TestPreHeaderRowsUnderARefusedManifest(unittest.TestCase):
+    """spec.md's "a mismatched manifest refuses to render the names" has to
+    hold for rows decoded *before* the first header frame too -- the header
+    repeats precisely so a host attaching mid-stream can decode
+    (interfaces/wire.md:37), and that is exactly the case a single-pass
+    decode leaked: it renders each records frame against whatever manifest
+    state held at that moment, which for a pre-header row is the still-
+    unchecked, still-matching-looking manifest. Two-pass fixes it by finding
+    the header (and any refusal) before rendering any row at all.
+    """
+
+    def _run(self, stream_path, manifest_path):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+             "--manifest", manifest_path, "--json", stream_path],
+            capture_output=True, text=True, check=True,
+        )
+
+    def test_records_before_header_get_no_names_under_a_refused_manifest(self):
+        import json
+        import tempfile
+        # A thread_switch_in record *before* any header frame, then the header
+        # whose build_id disagrees with the manifest below. A single-pass
+        # decode would have already rendered the pre-header row against the
+        # (not yet refused) manifest by the time it learns the build_id is
+        # wrong.
+        raw = (records_frame(1, [(1000, 0, 0x2000_0000, 0)])
+               + header_frame(seq=0, cycles_per_sec=1_000_000, build_id="firmware-build"))
+        with tempfile.TemporaryDirectory() as d:
+            stream_path = os.path.join(d, "stream.bin")
+            manifest_path = os.path.join(d, "manifest.json")
+            with open(stream_path, "wb") as fh:
+                fh.write(raw)
+            with open(manifest_path, "w", encoding="utf-8") as fh:
+                json.dump({"build_id": "manifest-build",
+                          "threads": {"0x20000000": "some_thread"}}, fh)
+
+            result = self._run(stream_path, manifest_path)
+            trace = json.loads(result.stdout)
+
+            self.assertTrue(trace["manifest_refused"], "a mismatched manifest was not refused")
+            self.assertTrue(trace["records"], "no rows decoded at all")
+            self.assertTrue(all(r["name"] == "" for r in trace["records"]),
+                            "a refused manifest still labelled a pre-header row: "
+                            f"{trace['records']}")
+            # The pre-header row (frame_index 0 -- the records frame is the
+            # first chunk on the wire) still gets a correct `us`: the whole
+            # stream is read into memory before any row is rendered, so the
+            # header's cycles_per_sec is already known.
+            pre_header = [r for r in trace["records"] if r["frame_index"] == 0]
+            self.assertEqual(len(pre_header), 1)
+            self.assertEqual(pre_header[0]["us"], "1000.000")
+
+    def test_records_before_header_still_get_names_under_a_matching_manifest(self):
+        # The control case: same shape, but the manifest matches, so the
+        # pre-header row must still resolve its name -- the fix must not
+        # start over-refusing every mid-stream-attach capture.
+        import json
+        import tempfile
+        raw = (records_frame(1, [(1000, 0, 0x2000_0000, 0)])
+               + header_frame(seq=0, cycles_per_sec=1_000_000, build_id="same-build"))
+        with tempfile.TemporaryDirectory() as d:
+            stream_path = os.path.join(d, "stream.bin")
+            manifest_path = os.path.join(d, "manifest.json")
+            with open(stream_path, "wb") as fh:
+                fh.write(raw)
+            with open(manifest_path, "w", encoding="utf-8") as fh:
+                json.dump({"build_id": "same-build",
+                          "threads": {"0x20000000": "some_thread"}}, fh)
+
+            result = self._run(stream_path, manifest_path)
+            trace = json.loads(result.stdout)
+
+            self.assertFalse(trace["manifest_refused"])
+            pre_header = [r for r in trace["records"] if r["frame_index"] == 0]
+            self.assertEqual(len(pre_header), 1)
+            self.assertEqual(pre_header[0]["name"], "some_thread")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

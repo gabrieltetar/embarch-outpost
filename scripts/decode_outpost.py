@@ -412,39 +412,54 @@ def main() -> int:
                     )
                     stamps = None
 
+    # Two passes, not one: the whole stream is already read into memory above,
+    # and a single pass would render every records frame that precedes the
+    # first header against whatever manifest state held at that moment --
+    # which is the *matching* manifest even when the header several frames
+    # later turns out to disagree with it. The header repeats precisely so a
+    # host attaching mid-stream can decode (interfaces/wire.md:37); pre-header
+    # rows are exactly that case and must not be labelled from a manifest the
+    # stream goes on to refuse. Pass one only ever looks at the *first* header
+    # frame, matching the single-pass code this replaced.
     header = None
+    refused = False
+    for item in decode_stream(raw):
+        if item[0] == "header":
+            header = item[1]
+            if manifest and manifest.get("build_id") != header["build_id"]:
+                sys.stderr.write(
+                    "embarch-outpost: REFUSING to decode against this manifest.\n"
+                    f"  manifest build_id: {manifest.get('build_id')!r}\n"
+                    f"  firmware build_id: {header['build_id']!r}\n"
+                    "  The raw stream is intact; a mismatched manifest would relabel "
+                    "every marker and thread and produce a trace that is entirely "
+                    "readable and entirely wrong.\n"
+                )
+                if not args.allow_build_id_mismatch:
+                    manifest = None
+                    refused = True
+            break
+
+    if header is None:
+        sys.stderr.write("embarch-outpost: no header frame in this stream; nothing decodable\n")
+        return 2
+
+    # Pass two renders every records frame -- including ones that arrived
+    # before the header pass two just found -- against the final header and
+    # manifest state. That gives pre-header rows a correct `us` column (the
+    # header's `cycles_per_sec` is already known) and the same name/no-name
+    # treatment as every other row: manifest_refused and named output stay
+    # mutually exclusive for the whole stream, not just from the header on.
     all_rows = []
     stats = {}
     unwrap_state = {"last": None, "wraps": 0}
-    refused = False
-
     for item in decode_stream(raw):
-        if item[0] == "header":
-            new_header = item[1]
-            if header is None:
-                header = new_header
-                if manifest and manifest.get("build_id") != header["build_id"]:
-                    sys.stderr.write(
-                        "embarch-outpost: REFUSING to decode against this manifest.\n"
-                        f"  manifest build_id: {manifest.get('build_id')!r}\n"
-                        f"  firmware build_id: {header['build_id']!r}\n"
-                        "  The raw stream is intact; a mismatched manifest would relabel "
-                        "every marker and thread and produce a trace that is entirely "
-                        "readable and entirely wrong.\n"
-                    )
-                    if not args.allow_build_id_mismatch:
-                        manifest = None
-                        refused = True
-        elif item[0] == "records":
+        if item[0] == "records":
             all_rows.extend(
                 render(item[3], item[1], item[2], header, manifest, unwrap_state, stamps)
             )
         elif item[0] == "stats":
             stats = item[1]
-
-    if header is None:
-        sys.stderr.write("embarch-outpost: no header frame in this stream; nothing decodable\n")
-        return 2
 
     if args.json:
         json.dump({"header": header, "stats": stats, "manifest_refused": refused,
