@@ -357,5 +357,160 @@ class TestHeader(unittest.TestCase):
         self.assertEqual(rows, [])
 
 
+class TestArrivalJoinVerification(unittest.TestCase):
+    """`spec.md:61` -- "a join that cannot be verified stamps nothing."
+
+    `frame_bytes` is the arrival CSV's third column, and it is checked against
+    each frame's actual delimiter-separated chunk length before any
+    `rx_utc_ms` stamp is trusted. These tests cover the three shapes
+    `decisions/clocks.md` decision 18 and this task both name: a matching
+    column, a diverging one, and one that is missing or short.
+    """
+
+    def _write_arrival(self, tmp_path, rows):
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write("frame_index,rx_utc_ms,frame_bytes\n")
+            for row in rows:
+                fh.write(",".join(str(v) for v in row) + "\n")
+
+    def test_actual_frame_lengths_counts_the_same_chunks_as_frame_index(self):
+        # A bad-CRC frame still burns an index on both sides (see
+        # test_bad_crc_costs_one_frame_and_still_consumes_an_index above); its
+        # chunk still has to appear here at the same index.
+        raw = (header_frame(seq=0)
+               + records_frame(1, [(1000, 0, 1, 0)])
+               + records_frame(2, [(2000, 0, 1, 0)], break_crc=True)
+               + records_frame(3, [(3000, 0, 1, 0)]))
+        chunks = [c for c in raw.split(b"\x00") if c]
+        lengths = dec.actual_frame_lengths(raw)
+        self.assertEqual(lengths, {i: len(c) for i, c in enumerate(chunks)})
+
+    def test_matching_frame_bytes_finds_no_divergence(self):
+        raw = header_frame(seq=0) + records_frame(1, [(10, 0, 1, 0)])
+        actual = dec.actual_frame_lengths(raw)
+        claimed = dict(actual)
+        self.assertIsNone(dec.first_diverging_index(claimed, actual))
+
+    def test_diverging_frame_bytes_names_the_first_bad_index(self):
+        raw = (header_frame(seq=0)
+               + records_frame(1, [(10, 0, 1, 0)])
+               + records_frame(2, [(20, 0, 1, 0)])
+               + records_frame(3, [(30, 0, 1, 0)]))
+        actual = dec.actual_frame_lengths(raw)
+        claimed = dict(actual)
+        claimed[2] += 3  # a shifted join: this row no longer describes its frame
+        self.assertEqual(dec.first_diverging_index(claimed, actual), 2)
+
+    def test_read_arrivals_parses_a_matching_frame_bytes_column(self, tmp_path=None):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "arrival.csv")
+            self._write_arrival(path, [(0, 1000, 12), (1, 1020, 9)])
+            stamps, claimed = dec.read_arrivals(path)
+            self.assertEqual(stamps, {0: 1000, 1: 1020})
+            self.assertEqual(claimed, {0: 12, 1: 9})
+
+    def test_read_arrivals_degrades_when_frame_bytes_is_entirely_missing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "arrival.csv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("frame_index,rx_utc_ms\n0,1000\n1,1020\n")
+            stamps, claimed = dec.read_arrivals(path)
+            self.assertEqual(stamps, {0: 1000, 1: 1020})
+            self.assertIsNone(claimed, "no frame_bytes column at all: degrade, not refuse")
+
+    def test_read_arrivals_degrades_when_frame_bytes_is_short_on_one_row(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "arrival.csv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("frame_index,rx_utc_ms,frame_bytes\n0,1000,12\n1,1020\n")
+            stamps, claimed = dec.read_arrivals(path)
+            self.assertEqual(stamps, {0: 1000, 1: 1020})
+            self.assertIsNone(claimed, "one row short a column: degrade the whole file")
+
+    def test_main_stamps_a_matching_join(self):
+        import subprocess
+        import tempfile
+        raw = header_frame(seq=0) + records_frame(1, [(10, 0, 1, 0)])
+        chunks = [c for c in raw.split(b"\x00") if c]
+        with tempfile.TemporaryDirectory() as d:
+            stream_path = os.path.join(d, "stream.bin")
+            arrival_path = os.path.join(d, "arrival.csv")
+            with open(stream_path, "wb") as fh:
+                fh.write(raw)
+            # frame_index 0 is the header frame; the records frame this test
+            # inspects is frame_index 1.
+            self._write_arrival(arrival_path, [(0, 999, len(chunks[0])),
+                                               (1, 1000, len(chunks[1]))])
+            result = subprocess.run(
+                [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+                 "--arrival", arrival_path, stream_path],
+                capture_output=True, text=True, check=True,
+            )
+            rows = result.stdout.splitlines()[1:]
+            self.assertEqual([r.split(",")[2] for r in rows], ["1000"])
+            self.assertNotIn("REFUSING", result.stderr)
+
+    def test_main_refuses_a_diverging_join_and_names_the_index(self):
+        import subprocess
+        import tempfile
+        raw = (header_frame(seq=0)
+               + records_frame(1, [(10, 0, 1, 0)])
+               + records_frame(2, [(20, 0, 1, 0)]))
+        chunks = [c for c in raw.split(b"\x00") if c]
+        with tempfile.TemporaryDirectory() as d:
+            stream_path = os.path.join(d, "stream.bin")
+            arrival_path = os.path.join(d, "arrival.csv")
+            with open(stream_path, "wb") as fh:
+                fh.write(raw)
+            self._write_arrival(arrival_path, [
+                (0, 1000, len(chunks[0])),
+                (1, 1020, len(chunks[1]) + 1),  # diverges
+            ])
+            result = subprocess.run(
+                [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+                 "--arrival", arrival_path, stream_path],
+                capture_output=True, text=True, check=True,
+            )
+            rows = result.stdout.splitlines()[1:]
+            self.assertTrue(all(r.split(",")[2] == "" for r in rows),
+                            "rx_utc_ms stays empty throughout, not just at the bad index")
+            self.assertIn("frame_index 1", result.stderr)
+            self.assertIn("REFUSING", result.stderr)
+
+            allowed = subprocess.run(
+                [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+                 "--arrival", arrival_path, "--allow-unverified-join", stream_path],
+                capture_output=True, text=True, check=True,
+            )
+            allowed_rows = allowed.stdout.splitlines()[1:]
+            self.assertTrue(any(r.split(",")[2] != "" for r in allowed_rows),
+                            "--allow-unverified-join stamps anyway, mirroring "
+                            "--allow-build-id-mismatch's posture")
+
+    def test_main_degrades_on_a_missing_frame_bytes_column(self):
+        import subprocess
+        import tempfile
+        raw = header_frame(seq=0) + records_frame(1, [(10, 0, 1, 0)])
+        with tempfile.TemporaryDirectory() as d:
+            stream_path = os.path.join(d, "stream.bin")
+            arrival_path = os.path.join(d, "arrival.csv")
+            with open(stream_path, "wb") as fh:
+                fh.write(raw)
+            with open(arrival_path, "w", encoding="utf-8") as fh:
+                fh.write("frame_index,rx_utc_ms\n0,999\n1,1000\n")
+            result = subprocess.run(
+                [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+                 "--arrival", arrival_path, stream_path],
+                capture_output=True, text=True, check=True,
+            )
+            rows = result.stdout.splitlines()[1:]
+            self.assertEqual([r.split(",")[2] for r in rows], ["1000"],
+                             "no frame_bytes column: stamp as before")
+            self.assertIn("missing or short", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

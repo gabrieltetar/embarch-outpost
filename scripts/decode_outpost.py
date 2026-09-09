@@ -200,15 +200,22 @@ def decode_stream(raw: bytes):
     yield "stats", stats
 
 
-def read_arrivals(path: str) -> dict[int, int]:
-    """`frame_index,rx_utc_ms` -> a lookup, keyed by frame index.
+def read_arrivals(path: str) -> tuple[dict[int, int], dict[int, int] | None]:
+    """`(stamps, claimed_frame_bytes)`, both keyed by frame index.
 
     Frame index counts **non-empty delimiter-separated chunks** from the start
     of the capture -- the same thing this decoder counts, and the same thing the
     receiver counted while stamping. A frame that later fails its CRC still
     consumed an index on both sides, which is what keeps the two in step.
+
+    `claimed_frame_bytes` is `None` when the column is missing or short --
+    absent from every row, or absent/unparseable on at least one -- which
+    degrades to trusting the join unverified rather than refusing to read the
+    file at all (an older `<tap>.arrival.csv` carries only two columns).
     """
     stamps: dict[int, int] = {}
+    frame_bytes: dict[int, int] = {}
+    short = False
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -218,10 +225,53 @@ def read_arrivals(path: str) -> dict[int, int]:
             if len(parts) < 2:
                 continue
             try:
-                stamps[int(parts[0])] = int(parts[1])
+                idx = int(parts[0])
+                ms = int(parts[1])
             except ValueError:
                 continue
-    return stamps
+            stamps[idx] = ms
+            if len(parts) >= 3:
+                try:
+                    frame_bytes[idx] = int(parts[2])
+                except ValueError:
+                    short = True
+            else:
+                short = True
+    claimed = None if (short or not frame_bytes) else frame_bytes
+    return stamps, claimed
+
+
+def actual_frame_lengths(raw: bytes) -> dict[int, int]:
+    """The delimiter-separated chunk length actually seen at each frame index.
+
+    Counted exactly the way `decode_stream` counts `frame_index` -- every
+    non-empty chunk between `\\x00` bytes, before COBS decoding or any
+    validity check -- so a bad-CRC or bad-COBS frame still occupies its index
+    here, the same as it does on both sides of the arrival stamp.
+    """
+    lengths: dict[int, int] = {}
+    frame_index = -1
+    for chunk in raw.split(b"\x00"):
+        if not chunk:
+            continue
+        frame_index += 1
+        lengths[frame_index] = len(chunk)
+    return lengths
+
+
+def first_diverging_index(claimed: dict[int, int], actual: dict[int, int]) -> int | None:
+    """The lowest frame index where the arrival CSV's `frame_bytes` disagrees
+    with the actual chunk length, or `None` when every claimed index agrees.
+
+    An index the arrival CSV never stamped is not a divergence -- an arrival
+    log that starts or ends short of the capture is a known, already-priced
+    shape (decisions/clocks.md decision 18), not itself evidence of a bad
+    join.
+    """
+    for idx in sorted(claimed):
+        if actual.get(idx) != claimed[idx]:
+            return idx
+    return None
 
 
 def render(records, frame_index, seq, header, manifest, unwrap_state, stamps):
@@ -310,19 +360,57 @@ def main() -> int:
     ap.add_argument("stream", nargs="?", help="raw stream file; stdin if omitted")
     ap.add_argument("--manifest")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--arrival", help="frame_index,rx_utc_ms CSV from whoever received the "
-                                      "bytes. Without it rx_utc_ms is empty, which is a "
-                                      "trace that is ordered and untimed on the host's "
-                                      "clock -- a real answer, honestly distinguishable "
-                                      "from a timed one.")
+    ap.add_argument("--arrival", help="frame_index,rx_utc_ms,frame_bytes CSV from whoever "
+                                      "received the bytes. Without it rx_utc_ms is empty, "
+                                      "which is a trace that is ordered and untimed on the "
+                                      "host's clock -- a real answer, honestly "
+                                      "distinguishable from a timed one. With it, "
+                                      "frame_bytes is checked against each frame's actual "
+                                      "chunk length before any stamp is applied; a "
+                                      "disagreement refuses the whole join (see "
+                                      "--allow-unverified-join) rather than stamp a trace "
+                                      "shifted and silently wrong.")
     ap.add_argument("--allow-build-id-mismatch", action="store_true",
                     help="apply the manifest anyway. Renders a plausible, wrong trace; "
                          "exists only so a mismatch can be inspected.")
+    ap.add_argument("--allow-unverified-join", action="store_true",
+                    help="stamp rx_utc_ms anyway when the arrival CSV's frame_bytes "
+                         "column disagrees with the actual chunk length. Renders a "
+                         "plausible, wrong trace; exists only so a diverged join can "
+                         "be inspected.")
     args = ap.parse_args()
 
     raw = open(args.stream, "rb").read() if args.stream else sys.stdin.buffer.read()
     manifest = json.load(open(args.manifest, encoding="utf-8")) if args.manifest else None
-    stamps = read_arrivals(args.arrival) if args.arrival else None
+    stamps = None
+    if args.arrival:
+        stamps, claimed_frame_bytes = read_arrivals(args.arrival)
+        if claimed_frame_bytes is None:
+            sys.stderr.write(
+                "embarch-outpost: arrival CSV has no frame_bytes column (missing or "
+                "short); join stamped unverified.\n"
+            )
+        else:
+            first_bad = first_diverging_index(claimed_frame_bytes, actual_frame_lengths(raw))
+            if first_bad is not None:
+                sys.stderr.write(
+                    "embarch-outpost: arrival join diverges from frame_bytes at "
+                    f"frame_index {first_bad} -- the arrival CSV and this capture do "
+                    "not agree on where that frame started, which is exactly the "
+                    "shifted-and-readable trace spec.md:61 names.\n"
+                )
+                if args.allow_unverified_join:
+                    sys.stderr.write(
+                        "embarch-outpost: --allow-unverified-join set; stamping "
+                        "rx_utc_ms anyway.\n"
+                    )
+                else:
+                    sys.stderr.write(
+                        "embarch-outpost: REFUSING to stamp rx_utc_ms for this "
+                        "capture; the raw stream and trace are still written, "
+                        "ordered and untimed.\n"
+                    )
+                    stamps = None
 
     header = None
     all_rows = []

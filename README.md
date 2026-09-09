@@ -123,11 +123,21 @@ Decode it yourself with `scripts/decode_outpost.py`:
 python3 scripts/decode_outpost.py --manifest build/zephyr/outpost-manifest.json build/outpost.bin
 ```
 
-Add `--arrival <frame_index,rx_utc_ms CSV>` to fill in the host half of the row.
-Without it the `rx_utc_ms` column comes out empty, which is a trace that is
-**ordered and timed on the DUT's clock but unplaced on the host's** — a real
-answer, and honestly distinguishable from a fully placed one. `embarch-core`
+Add `--arrival <frame_index,rx_utc_ms,frame_bytes CSV>` to fill in the host half
+of the row. Without it the `rx_utc_ms` column comes out empty, which is a trace
+that is **ordered and timed on the DUT's clock but unplaced on the host's** — a
+real answer, and honestly distinguishable from a fully placed one. `embarch-core`
 writes exactly that CSV beside every capture (`<tap>.arrival.csv`).
+
+**The join is verified, not trusted.** Each row's `frame_bytes` is checked
+against that frame's actual delimiter-separated chunk length before its stamp
+is applied; on any disagreement `rx_utc_ms` is left empty throughout the whole
+capture — an ordered, untimed trace, same as no `--arrival` at all — with a
+stderr line naming the first frame index that diverged.
+`--allow-unverified-join` stamps anyway, mirroring `--allow-build-id-mismatch`
+below. An arrival CSV whose `frame_bytes` column is missing or short (an older,
+two-column file) degrades to the unverified join rather than refusing to read
+the file, and says so.
 
 It **refuses** to decode against a manifest whose `build_id` does not match the
 running firmware's, or whose record layout version is not this decoder's. Both
@@ -157,7 +167,9 @@ summary, not only in the `SKIP:` line where it happened — see
   costing one frame while still consuming a `frame_index`, a truncated batch
   counting `bad_body`, an unknown kind rendering as `unknown_N`, the wrap-vs-gap
   rule in **both** directions, and `us` as three fixed decimals rather than
-  `round()`.
+  `round()`. Also covers the arrival join's verification against `frame_bytes`
+  — a match, a divergence (and the index it names, and `--allow-unverified-join`
+  overriding it), and a missing/short column degrading rather than refusing.
 - `tests/vocab_check.py` — diffs the record-kind and header-flag vocabulary in
   `src/outpost_priv.h` (the producer, and the definition) against
   `scripts/decode_outpost.py`'s tables, and — read-only, skipped loudly if the
