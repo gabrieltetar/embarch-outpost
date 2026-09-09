@@ -8,10 +8,14 @@
  * @brief Internal shape of the outpost: records, ring, and the wire format.
  *
  * THE WIRE FORMAT IS PINNED IN TWO LANGUAGES. Anything changed here must be
- * changed in `embarch-core`'s decoder and in `scripts/decode_outpost.py`, and
- * OUTPOST_RECORD_LAYOUT_VERSION must be bumped. The suite's rule (see
- * ../embarch-doc/embarch-outpost/interfaces/wire.md) is that every wire record is
- * pinned by a test on both sides, against identical literal bytes.
+ * changed in `embarch-core`'s decoder and in `scripts/decode_outpost.py`. A
+ * change to the record or frame *shape* must also bump
+ * OUTPOST_RECORD_LAYOUT_VERSION (see its definition below for what does and
+ * does not count — appending an `enum outpost_kind` value does not, because a
+ * host decodes an unknown kind as `unknown_N` rather than failing). The
+ * suite's rule (see ../embarch-doc/embarch-outpost/interfaces/wire.md) is that
+ * every wire record is pinned by a test on both sides, against identical
+ * literal bytes.
  *
  * ---- Frame ----------------------------------------------------------------
  *
