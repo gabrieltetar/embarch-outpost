@@ -24,7 +24,7 @@ covers every copy uniformly, including the one it cannot regenerate.
   `as_str()` match arms) and `HeaderFlags` constants, in the sibling repo,
   read as text and pattern-matched. **Read-only, and skipped loudly rather
   than failed** if the sibling is not checked out beside this one -- the same
-  convention `cross_decoder.py` uses and decisions/module.md decision 22
+  convention `cross_decoder.py` uses and decisions/testing.md decision 22
   explains: a solo clone of `embarch-outpost` is entitled not to have
   `embarch-study-designer` beside it.
 

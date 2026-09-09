@@ -23,7 +23,7 @@ cross_decoder_note() {
     if [[ "$SUMMARY_PRINTED" == "no" && "$CROSS_DECODER_RESULT" != "ran" ]]; then
         echo
         echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
-        echo "against embarch-core/embarch-ui's committed fixtures. See decisions/module.md"
+        echo "against embarch-core/embarch-ui's committed fixtures. See decisions/testing.md"
         echo "decision 22 for why that stays a skip rather than a failure."
     fi
 }
@@ -34,7 +34,7 @@ trap cross_decoder_note EXIT
 # repos (and skips loudly without them), so putting them first is what makes
 # the host half of this repo *always* exercised, rather than exercised only
 # where a Zephyr checkout happens to exist. This was itself the bug
-# decisions/module.md decision 22 records: the cross-decoder leg used to sit
+# decisions/testing.md decision 22 records: the cross-decoder leg used to sit
 # *after* the guard, so a bare checkout with no WEST set never reached it at
 # all, silently, and README.md's claim that "only the three Zephyr legs need a
 # toolchain" was false on this file's own ordering. vocab_check.py (decision
@@ -54,7 +54,7 @@ echo
 echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
 # Needs neither Zephyr nor west — it compares two host decoders over the
 # committed fixtures, and skips loudly (exit 0) if the sibling repos are not
-# present. See decisions/module.md decision 22 for why a skip here stays a
+# present. See decisions/testing.md decision 22 for why a skip here stays a
 # skip rather than becoming a failure, and the final summary below for how a
 # skipped run is still visible in the exit summary rather than only in a line
 # of mid-stream stdout.
@@ -97,6 +97,6 @@ echo "e2e stream:      ran"
 if [[ "$CROSS_DECODER_RESULT" != "ran" ]]; then
     echo
     echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
-    echo "against embarch-core/embarch-ui's committed fixtures. See decisions/module.md"
+    echo "against embarch-core/embarch-ui's committed fixtures. See decisions/testing.md"
     echo "decision 22 for why that stays a skip rather than a failure."
 fi

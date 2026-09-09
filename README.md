@@ -148,7 +148,7 @@ cross-decoder check **before** it demands `WEST`, so the toolchain-free half of
 this repo is exercised on a bare checkout and only the three Zephyr legs need a
 toolchain. A skipped cross-decoder is called out again in the script's final
 summary, not only in the `SKIP:` line where it happened — see
-`decisions/module.md` decision 22.
+`decisions/testing.md` decision 22.
 
 - `tests/decoder_unit.py` — stdlib `unittest` over synthesised bytes, and the
   only check here with **no** external requirement at all: no west, no
