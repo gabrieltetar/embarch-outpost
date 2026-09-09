@@ -7,7 +7,7 @@
  * @file
  * @brief Zephyr TRACING_USER hook implementations.
  *
- * design.md §3 decisions 2 and 7.
+ * decisions.md decisions 2 and 7.
  *
  * subsys/tracing/user/tracing_user.c declares every sys_trace_*_user() as
  * __weak and empty; defining a strong one here is the entire integration
@@ -55,7 +55,7 @@ static inline uint32_t active_vector(void)
 }
 #endif
 
-/* ---- self-exclusion (design.md §3 decision 19) --------------------------
+/* ---- self-exclusion (decisions.md decision 19) --------------------------
  *
  * Two predicates, both compiled out entirely when
  * CONFIG_EMBARCH_OUTPOST_TRACE_SELF=y, so the honest-but-expensive setting

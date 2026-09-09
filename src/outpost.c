@@ -7,7 +7,8 @@
  * @file
  * @brief Init, the drain thread, and the UART transport.
  *
- * design.md §3 decisions 3, 4, 5 and §5.2.
+ * ../embarch-doc/embarch-outpost/decisions.md decisions 3, 4, 5. Kconfig:
+ * ../embarch-doc/embarch-outpost/interfaces/integration.md.
  *
  * The outpost owns its whole emit path. CONFIG_TRACING_USER does not select
  * TRACING_CORE (subsys/tracing/CMakeLists.txt, verified), so Zephyr's ring,
@@ -56,7 +57,7 @@ static const struct device *const outpost_uart = DEVICE_DT_GET(OUTPOST_UART_NODE
 #define FRAME_BYTES (BATCH_BYTES + 4 + ((BATCH_BYTES + 4) / 254) + 3)
 
 /* How many records it takes to fill a batch, as a target for the fill wait
- * (design.md §3 decision 20). Deliberately computed against the *worst-case*
+ * (decisions.md decision 20). Deliberately computed against the *worst-case*
  * record size, so the target is reached before the batch could overflow and a
  * frame is never cut short by having waited for one record too many. On a real
  * trace a record averages well under the worst case, so a full batch holds more
@@ -361,7 +362,7 @@ static void drain_thread_fn(void *a, void *b, void *c)
 #endif
 
 #if CONFIG_EMBARCH_OUTPOST_FILL_WAIT_MS > 0
-		/* Let the batch fill before paying for a frame (design.md §3
+		/* Let the batch fill before paying for a frame (decisions.md
 		 * decision 20).
 		 *
 		 * Without this the loop is a fixed point at the link rate: it
@@ -394,7 +395,7 @@ K_THREAD_STACK_DEFINE(drain_stack, CONFIG_EMBARCH_OUTPOST_THREAD_STACK_SIZE);
 
 /* Not `static`, and named for what it is rather than for where it lives: the
  * trace hooks compare `k_current_get()` against `&outpost_drain_thread` to
- * keep the instrument out of its own trace (design.md §3 decision 19), and a
+ * keep the instrument out of its own trace (decisions.md decision 19), and a
  * file-static cannot be reached from outpost_hooks.c. The declaration and the
  * reasoning are in outpost_priv.h.
  *

@@ -44,7 +44,7 @@ check(not trace["manifest_refused"], "the matching manifest was refused")
 
 # Frame indices must be non-decreasing and must cover more than one frame,
 # because that index is the only thing a host has to join arrival stamps onto
-# (design.md §3 decision 18). Kept from the layout-2 test suite: it was written
+# (decisions.md decision 18). Kept from the layout-2 test suite: it was written
 # alongside the host-stamp columns and has nothing to do with what a record
 # contains, so it survives layout 2's withdrawal.
 frame_indices = [r["frame_index"] for r in trace["records"]]
@@ -82,7 +82,7 @@ check({"WORK_BEGIN", "WORK_END", "BURST"} <= named_markers,
 check(sorted(manifest["markers"].values()) == ["BURST", "WORK_BEGIN", "WORK_END"],
       f"manifest markers wrong: {manifest['markers']}")
 
-# ---- self-exclusion (design.md §3 decision 19) -----------------------------
+# ---- self-exclusion (decisions.md decision 19) -----------------------------
 #
 # CONFIG_EMBARCH_OUTPOST_TRACE_SELF defaults n, and this test does not set it,
 # so the header must SAY the trace is self-excluded and the trace must actually

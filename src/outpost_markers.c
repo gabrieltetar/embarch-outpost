@@ -7,7 +7,7 @@
  * @file
  * @brief The marker table the manifest generator reads out of the ELF.
  *
- * design.md §3 decision 6. The application's one OUTPOST_MARKERS(X)
+ * decisions.md decision 6. The application's one OUTPOST_MARKERS(X)
  * declaration produces both the enumerators OUTPOST_EVT() needs and this
  * table. Names live in the image so the generator can resolve them; they never
  * reach the wire.

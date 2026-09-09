@@ -10,7 +10,7 @@
  * THE WIRE FORMAT IS PINNED IN TWO LANGUAGES. Anything changed here must be
  * changed in `embarch-core`'s decoder and in `scripts/decode_outpost.py`, and
  * OUTPOST_RECORD_LAYOUT_VERSION must be bumped. The suite's rule (see
- * ../embarch-doc/embarch-outpost/design.md §4) is that every wire record is
+ * ../embarch-doc/embarch-outpost/interfaces/wire.md) is that every wire record is
  * pinned by a test on both sides, against identical literal bytes.
  *
  * ---- Frame ----------------------------------------------------------------
@@ -18,7 +18,7 @@
  *   frame := COBS(body || crc32_ieee(body) as 4 bytes LE) || 0x00
  *
  * COBS is the same framing the Core<->dev-bench link already uses
- * (embarch-study-designer/design.md §3 decision 10), so Core's framing code
+ * (embarch-study-designer/decisions.md decision 10), so Core's framing code
  * shape applies unchanged. The CRC lets a host discard a corrupt or partial
  * frame rather than mis-decode it.
  *
@@ -260,7 +260,7 @@ uint32_t outpost_ring_slots(void);
 
 /** How many records are waiting, clamped to the ring's size.
  *
- *  A hint for sizing a batch (design.md §3 decision 20), never a fact: it can
+ *  A hint for sizing a batch (decisions.md decision 20), never a fact: it can
  *  be stale, and it can include a slot a preempted producer has reserved but
  *  not published. Both errors make the drain thread wait *less* than it meant
  *  to, which costs a slightly smaller frame and nothing else.
@@ -299,7 +299,7 @@ size_t outpost_frame(const uint8_t *body, size_t body_len, uint8_t *out, size_t 
 const char *outpost_build_id(void);
 const char *outpost_version(void);
 
-/* ---- self-exclusion (design.md §3 decision 19) --------------------------
+/* ---- self-exclusion (decisions.md decision 19) --------------------------
  *
  * Both of these are consumed by outpost_hooks.c, in the two hottest paths in
  * the system, and both resolve to a compare against a compile-time constant.

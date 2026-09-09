@@ -7,7 +7,7 @@
  * @file
  * @brief The record timestamp source.
  *
- * design.md §3 decisions 3 and 4.
+ * decisions.md decisions 3 and 4.
  *
  * outpost_cycles() is read once per record, by every thread and every ISR in
  * the image. It is the hottest line in the module, and on nRF it was also the

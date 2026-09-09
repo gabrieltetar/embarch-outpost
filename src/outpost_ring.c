@@ -7,7 +7,7 @@
  * @file
  * @brief The record ring — lock-free, multi-producer, single-consumer.
  *
- * design.md §3 decisions 3 and 5.
+ * decisions.md decisions 3 and 5.
  *
  * Producers are every thread and every ISR in the image; the consumer is the
  * one drain thread. The ring is a Vyukov-style bounded MPSC queue: a producer

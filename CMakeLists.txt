@@ -1,5 +1,5 @@
 # embarch-outpost — Zephyr module.
-# ../embarch-doc/embarch-outpost/design.md §5.
+# ../embarch-doc/embarch-outpost/interfaces/integration.md.
 
 # **Above the CONFIG_EMBARCH_OUTPOST guard, deliberately.** `outpost.h` is
 # written to be safe to include in an image that does not trace: its

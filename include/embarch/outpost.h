@@ -7,7 +7,7 @@
  * @file
  * @brief embarch-outpost public surface: marker registration and OUTPOST_EVT.
  *
- * Design: ../embarch-doc/embarch-outpost/design.md §3 decisions 6 and 9.
+ * Design: ../embarch-doc/embarch-outpost/decisions.md decisions 6 and 9.
  *
  * An application declares its markers once, as an X-macro list, in a header
  * named by CONFIG_EMBARCH_OUTPOST_MARKER_HEADER:
@@ -53,7 +53,7 @@ extern "C" {
  *
  * IDs are positional and therefore stable only within one build — which is
  * precisely why the manifest is CRC/build-ID matched against the running
- * firmware before anything is decoded (design.md §3 decision 9).
+ * firmware before anything is decoded (decisions.md decision 9).
  */
 enum outpost_marker_id {
 #define _OUTPOST_MARKER_ENUM(name) OUTPOST_MARKER_##name,

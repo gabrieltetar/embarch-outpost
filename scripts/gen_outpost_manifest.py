@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Emit outpost-manifest.json from a linked Zephyr ELF.
 
-../embarch-doc/embarch-outpost/design.md §3 decisions 6, 7, 8, 9 and §5.4.
+../embarch-doc/embarch-outpost/decisions.md decisions 6, 7, 8, 9. Kconfig
+symbols: ../embarch-doc/embarch-outpost/interfaces/integration.md.
 
 Everything this reads is a fact recorded in the image by the build that
 produced it. Nothing here matches heuristically, and nothing is guessed:
@@ -312,7 +313,7 @@ def read_markers(elf: Elf, notes: list[str]) -> dict[str, str]:
 def read_threads(elf: Elf, notes: list[str]) -> dict[str, str]:
     """Every thread object in the image, by address.
 
-    A thread pointer is what crosses the wire (design.md §3 decision 8), and
+    A thread pointer is what crosses the wire (decisions.md decision 8), and
     what makes it a *name* is this table. Until 2026-08-27 the table came from
     symbol names alone -- `_k_thread_obj_<name>`, which is literally what
     `K_THREAD_DEFINE(name, ...)` expands its `struct k_thread` to, plus the

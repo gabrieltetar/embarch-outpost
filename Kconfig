@@ -1,7 +1,8 @@
 # embarch-outpost — MCU load tracing out a TX-only UART.
 #
-# Every symbol here is documented in ../embarch-doc/embarch-outpost/design.md
-# §5.3. Defaults are provisional: as of the first implementation pass no
+# Every symbol here is documented in
+# ../embarch-doc/embarch-outpost/interfaces/integration.md. Defaults are
+# provisional: as of the first implementation pass no
 # outpost byte has ever crossed a real UART, so none of them is measured.
 
 menuconfig EMBARCH_OUTPOST
@@ -89,7 +90,7 @@ config EMBARCH_OUTPOST_FILL_WAIT_MS
 	  this long before it is transmitted. That costs nothing here, and it is
 	  worth being precise about why, because under record layout 2 it would
 	  have cost accuracy instead. A record carries its own DUT timestamp again
-	  (design.md §3 decisions 4, 17), so when it left the ring has no bearing
+	  (decisions.md decisions 4, 17), so when it left the ring has no bearing
 	  on when the host says it happened. Layout 2's only clock was the frame's
 	  arrival time, and delaying a frame would have moved every event in it.
 	  **The clock fix is what makes this free.**

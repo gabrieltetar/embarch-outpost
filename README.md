@@ -25,8 +25,12 @@ and the locks go. The version number went 2 → 3 rather than back to 1 because 
 version byte exists so a host can say "I decode up to N", and a number reused
 after an incompatible wire has worn a higher one cannot say that.
 
-Design and rationale: [../embarch-doc/embarch-outpost/design.md](../embarch-doc/embarch-outpost/design.md).
-This README is the operating manual; that doc is why.
+Design and rationale, four files: current truth
+[spec.md](../embarch-doc/embarch-outpost/spec.md), why
+[decisions.md](../embarch-doc/embarch-outpost/decisions.md), unresolved
+[open.md](../embarch-doc/embarch-outpost/open.md), reference
+[interfaces/](../embarch-doc/embarch-outpost/interfaces/).
+This README is the operating manual; those docs are why.
 
 ## What it costs you to adopt
 
@@ -186,4 +190,4 @@ Built, `native_sim`-verified end to end, and built for the real nRF54L15
 reference-dut target with its manifest resolving that image's real threads and
 ISRs. **No outpost byte has ever crossed a real UART.** Every wire constant in
 `Kconfig` is a provisional default nobody has measured, and the instrumentation
-overhead is deliberately uncharacterised — see `design.md` §7.
+overhead is deliberately uncharacterised — see `spec.md` §4.
