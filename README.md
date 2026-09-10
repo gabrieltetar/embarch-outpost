@@ -204,3 +204,7 @@ ISRs. **No outpost byte has ever crossed a real UART.** Every wire constant in
 `Kconfig` is a provisional default nobody has measured. The instrumentation
 overhead has been measured, though — 1.6% of the DUT's own CPU (misread as
 78.1% on the host clock) — see `spec.md` §4.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

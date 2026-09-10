@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2026 Intercreate / EmbArch
- * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2026 Gabriel Tetar
+ * SPDX-License-Identifier: MIT
  */
 
 /* An application that traces in one build and ships in another, compiled here
