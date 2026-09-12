@@ -1,0 +1,48 @@
+# The host-only half of tests/run-all.sh, on every push and PR.
+#
+# WHAT THIS DOES NOT COVER, and read a green check as nothing more:
+#
+#   - The three Zephyr legs (ztest unit, module-off compile, native_sim
+#     end-to-end stream). They need `west`, a Zephyr checkout and the SDK,
+#     none of which exist on this runner. A workflow that provisioned them
+#     would be real cost and a real maintenance surface; that was weighed and
+#     deliberately not taken. See suite/decisions.md 2 in embarch-doc.
+#   - The cross-decoder leg (tests/cross_decoder.py), which compares this
+#     repo's decoder against embarch-core's over committed fixtures. It needs
+#     the sibling repos checked out beside this one, so here it would SKIP on
+#     every run — a step unable to fail for the reason it was added — and it
+#     is therefore not run at all rather than run as a permanent skip.
+#     vocab_check.py's own sibling half (embarch-study-designer) skips the
+#     same way, loudly, inside a leg that still checks the local half.
+#
+# WHY THE LEGS ARE LISTED HERE AND run-all.sh IS NOT INVOKED: run-all.sh is
+# one script whose west guard (`WEST="${WEST:?...}"`, under `set -euo
+# pipefail`) exits non-zero on a toolchain-free runner, so invoking it here
+# could never go green. The cost of listing legs instead is that a NEW
+# host-only leg added to run-all.sh is not picked up here automatically —
+# add it below in the same commit.
+
+name: host-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  decoder-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decoder unit tests (host Python; no west, no ZEPHYR_BASE)
+        run: python3 tests/decoder_unit.py
+
+  vocab-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record kinds and header flags vs src/outpost_priv.h
+        # The sibling embarch-study-designer half skips loudly and by design
+        # when that repo is not checked out beside this one (decisions/wire.md
+        # decision 23); the local half is what this leg exercises here.
+        run: python3 tests/vocab_check.py

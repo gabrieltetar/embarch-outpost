@@ -160,6 +160,18 @@ toolchain. A skipped cross-decoder is called out again in the script's final
 summary, not only in the `SKIP:` line where it happened — see
 `decisions/testing.md` decision 22.
 
+**CI runs the host half only.** `.github/workflows/host-tests.yml` runs
+`decoder_unit.py` and `vocab_check.py` on every push to `main` and every PR. It
+does not invoke `run-all.sh` — that script's `WEST` guard exits non-zero on a
+runner with no toolchain — and it does not run the three Zephyr legs or the
+cross-decoder, the latter because it could only ever `SKIP` there. So **a green
+check means the host decoder and the record vocabulary agree with
+`src/outpost_priv.h`, and says nothing about the module as Zephyr builds it.**
+The workflow's own header carries the same list; the reasoning is
+`suite/decisions.md` 2 in `embarch-doc`. **A new host-only leg added to
+`run-all.sh` must be added to that workflow in the same commit** — it lists
+legs rather than calling the script.
+
 - `tests/decoder_unit.py` — stdlib `unittest` over synthesised bytes, and the
   only check here with **no** external requirement at all: no west, no
   `ZEPHYR_BASE`, no sibling repos, no fixtures. It pins the reference decoder's
