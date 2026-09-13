@@ -158,7 +158,7 @@ cross-decoder check **before** it demands `WEST`, so the toolchain-free half of
 this repo is exercised on a bare checkout and only the three Zephyr legs need a
 toolchain. A skipped cross-decoder is called out again in the script's final
 summary, not only in the `SKIP:` line where it happened — see
-`decisions/testing.md` decision 22.
+`decisions/testing.md` decision 26.
 
 **CI runs the host half only.** `.github/workflows/host-tests.yml` runs
 `decoder_unit.py` and `vocab_check.py` on every push to `main` and every PR. It

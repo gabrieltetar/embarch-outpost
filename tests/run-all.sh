@@ -24,7 +24,7 @@ cross_decoder_note() {
         echo
         echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
         echo "against embarch-core/embarch-ui's committed fixtures. See decisions/testing.md"
-        echo "decision 22 for why that stays a skip rather than a failure."
+        echo "decision 26 for why that stays a skip rather than a failure."
     fi
 }
 trap cross_decoder_note EXIT
@@ -54,7 +54,7 @@ echo
 echo "=== cross-decoder (this repo's decoder vs embarch-core's, same bytes) ==="
 # Needs neither Zephyr nor west — it compares two host decoders over the
 # committed fixtures, and skips loudly (exit 0) if the sibling repos are not
-# present. See decisions/testing.md decision 22 for why a skip here stays a
+# present. See decisions/testing.md decision 26 for why a skip here stays a
 # skip rather than becoming a failure, and the final summary below for how a
 # skipped run is still visible in the exit summary rather than only in a line
 # of mid-stream stdout.
@@ -98,5 +98,5 @@ if [[ "$CROSS_DECODER_RESULT" != "ran" ]]; then
     echo
     echo "NOTE: cross-decoder was skipped, not passed — this run checked nothing"
     echo "against embarch-core/embarch-ui's committed fixtures. See decisions/testing.md"
-    echo "decision 22 for why that stays a skip rather than a failure."
+    echo "decision 26 for why that stays a skip rather than a failure."
 fi
