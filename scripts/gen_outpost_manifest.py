@@ -610,7 +610,7 @@ def main() -> int:
             # Present for reference only. The host uses the rate the firmware
             # reports in its header frame, because this Kconfig legitimately
             # defaults to 0 on targets that read their timer frequency at
-            # runtime (decision 4).
+            # runtime (interfaces/wire.md).
             "cycles_per_sec_config": args.cycles_per_sec_config,
             "arch": elf.arch,
             "markers": read_markers(elf, notes),
