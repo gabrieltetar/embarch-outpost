@@ -49,7 +49,7 @@
  *       cycles_per_sec:  varint(u32)  -- sys_clock_hw_cycles_per_sec(), READ
  *                                       AT RUNTIME: the Kconfig is legitimately
  *                                       0 on targets that read their timer
- *                                       frequency at runtime (decision 4)
+ *                                       frequency at runtime (interfaces/wire.md)
  *       outpost_version: postcard string (varint len, then bytes)
  *       build_id:        postcard string
  *
