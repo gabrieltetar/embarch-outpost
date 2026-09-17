@@ -86,14 +86,15 @@ config EMBARCH_OUTPOST_FILL_WAIT_MS
 	  the link was carrying no records at all, and the per-record cost was
 	  13.0 bytes against a body of about 9.5.
 
-	  The trade is **latency, and only latency**: a record can sit in the ring
-	  this long before it is transmitted. That costs nothing here, and it is
-	  worth being precise about why, because under record layout 2 it would
-	  have cost accuracy instead. A record carries its own DUT timestamp again
-	  (decisions.md decisions 4, 17), so when it left the ring has no bearing
-	  on when the host says it happened. Layout 2's only clock was the frame's
-	  arrival time, and delaying a frame would have moved every event in it.
-	  **The clock fix is what makes this free.**
+	  The trade is **latency, and only latency** (decisions.md decision 20):
+	  a record can sit in the ring this long before it is transmitted. That
+	  costs nothing here, and it is worth being precise about why, because
+	  under record layout 2 it would have cost accuracy instead. A record
+	  carries its own DUT timestamp again (decisions.md decisions 4, 17), so
+	  when it left the ring has no bearing on when the host says it happened.
+	  Layout 2's only clock was the frame's arrival time, and delaying a frame
+	  would have moved every event in it. **The clock fix is what makes this
+	  free.**
 
 	  It also costs nothing in resolution, for the same reason. Bigger frames
 	  used to mean a coarser trace; they no longer mean anything of the kind.

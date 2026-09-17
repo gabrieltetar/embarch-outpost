@@ -7,7 +7,8 @@
  * @file
  * @brief Zephyr TRACING_USER hook implementations.
  *
- * decisions.md decisions 2 and 7.
+ * decisions.md decisions 2 and 7. The GPIO dispatch hooks below implement
+ * decision 25.
  *
  * subsys/tracing/user/tracing_user.c declares every sys_trace_*_user() as
  * __weak and empty; defining a strong one here is the entire integration
@@ -188,7 +189,10 @@ void sys_trace_idle_user(void)
 
 #if defined(CONFIG_EMBARCH_OUTPOST_TRACE_GPIO)
 
-/* The one hook family Zephyr instruments outside the kernel, and the reason it
+/* decisions.md decision 25: GPIO dispatch traced as a handler timeline, not
+ * pin sampling.
+ *
+ * The one hook family Zephyr instruments outside the kernel, and the reason it
  * is worth having: a GPIO interrupt already shows up as an ISR_ENTER/ISR_EXIT
  * pair on the GPIOTE vector, but that pair says nothing about *which* of the
  * callbacks registered on that port ran inside it, or for how long. On a board
