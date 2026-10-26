@@ -27,6 +27,10 @@ import sys
 FRAME_RECORDS = 0x01
 FRAME_HEADER = 0x02
 
+# The record layout this decoder's records-frame grammar speaks. Keep equal to
+# OUTPOST_RECORD_LAYOUT_VERSION in src/outpost_priv.h.
+SPOKEN_LAYOUT = 3
+
 KIND_NAMES = {
     0: "thread_switch_in",
     1: "thread_switch_out",
@@ -426,6 +430,29 @@ def main() -> int:
     for item in decode_stream(raw):
         if item[0] == "header":
             header = item[1]
+            if header["record_layout_version"] != SPOKEN_LAYOUT:
+                # No override: this decoder has no other grammar to apply, so
+                # every row it rendered would be plausible and wrong.
+                sys.stderr.write(
+                    "embarch-outpost: REFUSING to decode this stream.\n"
+                    f"  stream record_layout_version: {header['record_layout_version']}\n"
+                    f"  this decoder speaks layout:   {SPOKEN_LAYOUT}\n"
+                    "  Parsing it with the wrong grammar would yield a whole capture of "
+                    "plausible, wrong rows; use a decoder for that layout.\n"
+                )
+                return 2
+            if manifest and manifest.get("record_layout_version") is not None \
+                    and manifest["record_layout_version"] != header["record_layout_version"]:
+                sys.stderr.write(
+                    "embarch-outpost: REFUSING to decode against this manifest.\n"
+                    f"  manifest record_layout_version: {manifest['record_layout_version']!r}\n"
+                    f"  stream record_layout_version:   {header['record_layout_version']!r}\n"
+                    "  The raw stream is intact; a manifest generated for another layout "
+                    "describes records this stream does not carry.\n"
+                )
+                if not args.allow_build_id_mismatch:
+                    manifest = None
+                    refused = True
             if manifest and manifest.get("build_id") != header["build_id"]:
                 sys.stderr.write(
                     "embarch-outpost: REFUSING to decode against this manifest.\n"

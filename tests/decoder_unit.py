@@ -592,5 +592,68 @@ class TestPreHeaderRowsUnderARefusedManifest(unittest.TestCase):
             self.assertEqual(pre_header[0]["name"], "some_thread")
 
 
+class TestLayoutRefusal(unittest.TestCase):
+    """A header whose layout is not the decoder's is refused, not parsed with
+    layout 3 anyway; a manifest whose layout disagrees with the header is
+    refused the way a build-ID mismatch is."""
+
+    def _run(self, raw, manifest=None, extra=()):
+        import json
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            sp = os.path.join(d, "stream.bin")
+            with open(sp, "wb") as fh:
+                fh.write(raw)
+            cmd = [sys.executable, os.path.join(MODULE, "scripts", "decode_outpost.py"),
+                   "--json", *extra]
+            if manifest is not None:
+                mp = os.path.join(d, "manifest.json")
+                with open(mp, "w", encoding="utf-8") as fh:
+                    json.dump(manifest, fh)
+                cmd += ["--manifest", mp]
+            return subprocess.run(cmd + [sp], capture_output=True, text=True)
+
+    def test_foreign_layout_is_refused_with_both_numbers_and_no_rows(self):
+        raw = (header_frame(layout=4, build_id="b")
+               + records_frame(1, [(1000, 0, 0x2000_0000, 0)]))
+        r = self._run(raw)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("4", r.stderr)
+        self.assertIn("3", r.stderr)
+        self.assertIn("record_layout_version", r.stderr)
+
+    def test_foreign_layout_has_no_override(self):
+        raw = header_frame(layout=4) + records_frame(1, [(1000, 0, 0, 0)])
+        r = self._run(raw, extra=("--allow-build-id-mismatch", "--allow-unverified-join"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+
+    def test_manifest_layout_disagreeing_with_header_is_refused(self):
+        import json
+        raw = (header_frame(layout=3, build_id="b")
+               + records_frame(1, [(1000, 0, 0x2000_0000, 0)]))
+        m = {"build_id": "b", "record_layout_version": 4,
+             "threads": {"0x20000000": "t"}}
+        r = self._run(raw, m)
+        self.assertEqual(r.returncode, 0)
+        trace = json.loads(r.stdout)
+        self.assertTrue(trace["manifest_refused"])
+        self.assertTrue(all(x["name"] == "" for x in trace["records"]))
+        self.assertIn("4", r.stderr)
+        self.assertIn("3", r.stderr)
+
+    def test_matching_manifest_layout_still_names(self):
+        import json
+        raw = (header_frame(layout=3, build_id="b")
+               + records_frame(1, [(1000, 0, 0x2000_0000, 0)]))
+        m = {"build_id": "b", "record_layout_version": 3,
+             "threads": {"0x20000000": "t"}}
+        trace = json.loads(self._run(raw, m).stdout)
+        self.assertFalse(trace["manifest_refused"])
+        self.assertEqual(trace["records"][0]["name"], "t")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

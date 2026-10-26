@@ -8,6 +8,7 @@ produced.
     ./run.sh
 
 Asserts, rather than reports: a header frame decodes; every frame passes its
-CRC; every record kind the build has enabled appears; the manifest resolves
+CRC; the thread, ISR, idle, marker and gap record kinds appear (not the GPIO
+records, which the app has no device to produce, and not `thread_name`); the manifest resolves
 real thread and marker names; and a manifest with the wrong `build_id` is
 refused rather than applied.

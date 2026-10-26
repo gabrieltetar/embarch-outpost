@@ -2,8 +2,9 @@
 #
 # Every symbol here is documented in
 # ../embarch-doc/embarch-outpost/interfaces/integration.md. Defaults are
-# provisional: as of the first implementation pass no
-# outpost byte has ever crossed a real UART, so none of them is measured.
+# a mix: ring size, fill wait and self-tracing were measured on a real nRF54L15
+# at 460800 baud (2026-08-27); the rest are still assumed. That document's
+# provenance column says which is which.
 
 menuconfig EMBARCH_OUTPOST
 	bool "EmbArch outpost MCU load tracing"

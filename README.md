@@ -204,17 +204,25 @@ legs rather than calling the script.
 - `tests/native_sim_stream` — the end-to-end one: a real Zephyr app whose only
   stdout writer is the outpost UART, run, captured, and decoded against the
   manifest its own build produced. Asserts that every frame passes its CRC,
-  that every record kind appears (gap included — the app overflows the ring on
-  purpose), that real thread and marker names resolve, and that a manifest with
-  the wrong build ID is refused rather than applied.
+  that seven record kinds appear (thread switch in and out, ISR enter and exit,
+  idle, marker, and gap — the app overflows the ring on purpose), that a
+  `thread_create` record identifies the drain thread (required only for the
+  self-exclusion check), that real thread and marker names resolve, and that a manifest with
+  the wrong build ID is refused rather than applied. It does **not** assert
+  `thread_name`, `gpio_dispatch` or `gpio_callback_done`: the app has no GPIO
+  device, so the GPIO records' literal bytes are covered in `tests/unit`
+  instead; `thread_name` has no assertion in either test.
 
 ## Status
 
 Built, `native_sim`-verified end to end, and built for the real nRF54L15
 reference-dut target with its manifest resolving that image's real threads and
-ISRs. **No outpost byte has ever crossed a real UART.** Every wire constant in
-`Kconfig` is a provisional default nobody has measured. The instrumentation
-overhead has been measured, though — 1.6% of the DUT's own CPU (misread as
+ISRs. Outpost bytes have crossed a real UART: a real nRF54L15 at 460800 baud, with
+measurements recorded since 2026-08-27. Some `Kconfig` defaults are measured
+against that (the ring size, the fill wait, self-tracing off) and the rest are
+still assumed; the provenance column in
+`../embarch-doc/embarch-outpost/interfaces/integration.md` says which. The
+instrumentation overhead has been measured too — 1.6% of the DUT's own CPU (misread as
 78.1% on the host clock) — see `spec.md` §4.
 
 ## License
