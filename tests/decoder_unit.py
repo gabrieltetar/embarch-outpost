@@ -274,6 +274,26 @@ class TestWrapVersusGap(unittest.TestCase):
             self.assertLess(row["cycles"], 1 << 32,
                             "no record here crossed a wrap; none may be shifted by 2**32")
 
+    def test_a_13_us_inversion_between_ordinary_records_is_tolerated_and_reported(self):
+        # Decision 17's first arm: a hook reads the counter and *then* reserves
+        # its ring slot, so a preempting ISR is stamped before the thread it
+        # preempted. A real capture showed one such step of 13 us; at the 1 MHz
+        # these tests use that is 13 cycles. Not a gap record, so nothing but the
+        # size of the step may be what keeps it from being read as a wrap.
+        # (The restart arm -- "longer than the whole capture, tested against the
+        # other clock" -- needs the host's stamps and lives in embarch-ui and
+        # embarch-core, not in this decoder: see tasks/outpost/018.)
+        raw = header_frame(seq=0, cycles_per_sec=1_000_000) + records_frame(1, [
+            (2000, 0, 1, 0),
+            (2013, 0, 2, 0),
+            (2000, 0, 3, 0),   # 13 us backwards, ordinary kind
+            (2100, 0, 1, 0),
+        ])
+        _, rows, _ = decode(raw)
+        self.assertEqual(len(rows), 4, "the inverted row is reported, not dropped")
+        self.assertEqual([r["cycles"] for r in rows], [2000, 2013, 2000, 2100])
+        self.assertEqual(rows[2]["us"], "2000.000")
+
     def test_a_real_wrap_does_unwrap(self):
         raw = header_frame(seq=0) + records_frame(1, [
             (0xFFFF_FF00, 0, 1, 0),
