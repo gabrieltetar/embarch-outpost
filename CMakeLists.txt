@@ -110,8 +110,9 @@ string(REPLACE ";" "," _outpost_marker_csv "${_outpost_marker_names}")
 string(MD5 _outpost_marker_hash "${_outpost_marker_csv}")
 string(SUBSTRING "${_outpost_marker_hash}" 0 8 _outpost_marker_hash)
 
-set(OUTPOST_BUILD_ID "${OUTPOST_APP_DESC}+op${OUTPOST_MODULE_DESC}+m${_outpost_marker_hash}")
-string(SUBSTRING "${OUTPOST_BUILD_ID}" 0 ${CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX} OUTPOST_BUILD_ID)
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/outpost_compose_build_id.cmake)
+outpost_compose_build_id(OUTPOST_BUILD_ID "${OUTPOST_APP_DESC}" "${OUTPOST_MODULE_DESC}"
+                         "${_outpost_marker_hash}" ${CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX})
 
 set(OUTPOST_VERSION "${OUTPOST_MODULE_DESC}")
 string(SUBSTRING "${OUTPOST_VERSION}" 0 ${CONFIG_EMBARCH_OUTPOST_BUILD_ID_MAX} OUTPOST_VERSION)

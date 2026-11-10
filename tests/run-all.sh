@@ -70,10 +70,20 @@ WEST="${WEST:?set WEST to a west executable}"
 : "${ZEPHYR_BASE:?set ZEPHYR_BASE to a Zephyr checkout}"
 BUILD_ROOT="${BUILD_ROOT:-$HERE/build}"
 
+echo "=== build-ID composition (cmake -P; host only) ==="
+cmake -P "$HERE/build_id_compose.cmake"
+echo
+
 echo "=== unit (ztest, native_sim) ==="
 "$WEST" build -p always -b native_sim -d "$BUILD_ROOT/unit" "$HERE/unit" -- \
     -DZEPHYR_EXTRA_MODULES="$MODULE"
 "$BUILD_ROOT/unit/zephyr/zephyr.exe"
+
+echo
+echo "=== overflow block (ztest, native_sim, ring at its 320 B minimum) ==="
+"$WEST" build -p always -b native_sim -d "$BUILD_ROOT/overflow_block" "$HERE/overflow_block" -- \
+    -DZEPHYR_EXTRA_MODULES="$MODULE"
+"$BUILD_ROOT/overflow_block/zephyr/zephyr.exe"
 
 echo
 echo "=== module off: <embarch/outpost.h> still compiles (compile-only) ==="
@@ -91,7 +101,9 @@ echo "=== summary ==="
 echo "decoder unit:    ran"
 echo "vocab check:     ran"
 echo "cross-decoder:   $CROSS_DECODER_RESULT"
+echo "build-id compose: ran"
 echo "unit (ztest):    ran"
+echo "overflow block: ran"
 echo "module off:      ran"
 echo "e2e stream:      ran"
 if [[ "$CROSS_DECODER_RESULT" != "ran" ]]; then

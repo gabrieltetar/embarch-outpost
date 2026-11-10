@@ -44,11 +44,12 @@ config EMBARCH_OUTPOST_BAUD
 config EMBARCH_OUTPOST_RING_BYTES
 	int "Record ring size in bytes"
 	default 4096
-	range 256 262144
+	range 320 262144
 	help
 	  Rounded down to a power-of-two count of slots, each
 	  sizeof(struct outpost_slot) = 20 bytes, so the default 4096 buys 128
-	  slots and 2560 bytes rather than the whole budget. The direct trade
+	  slots and 2560 bytes rather than the whole budget. 320 is 16 slots,
+	  the smallest ring; a lower value would still allocate 320. The direct trade
 	  against drop rate: when the ring is full a record is dropped,
 	  counted, and reported as an explicit gap record on the wire.
 
@@ -212,8 +213,10 @@ config EMBARCH_OUTPOST_OVERFLOW_BLOCK
 	default n
 	help
 	  The only way to lose nothing, and it perturbs the timing being
-	  measured. For a deliberate high-fidelity run. Has no effect in
-	  interrupt context, which can never block: those records still drop.
+	  measured. For a deliberate high-fidelity run. A thread waits in 1 ms
+	  sleeps, so the lower-priority drain thread runs and makes room. Where
+	  waiting is impossible (interrupt context, interrupts locked, pre-kernel,
+	  the idle thread, the drain thread itself) the record still drops.
 
 config EMBARCH_OUTPOST_UART_ASYNC
 	bool "Transmit with the asynchronous UART API"
@@ -255,6 +258,9 @@ config EMBARCH_OUTPOST_BUILD_ID_MAX
 	int "Maximum build-ID string length carried in the header frame"
 	default 64
 	range 16 128
+	help
+	  When the app and module describes do not fit, they are cut; the
+	  trailing "+m<hash>" (10 characters, the marker-list hash) never is.
 
 module = EMBARCH_OUTPOST
 module-str = embarch outpost

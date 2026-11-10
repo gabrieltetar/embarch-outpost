@@ -75,6 +75,10 @@
 #define RING_SLOTS 16
 #endif
 
+BUILD_ASSERT(RING_SLOTS * OUTPOST_SLOT_BYTES <= CONFIG_EMBARCH_OUTPOST_RING_BYTES,
+	     "the ring is larger than CONFIG_EMBARCH_OUTPOST_RING_BYTES; the Kconfig range "
+	     "minimum must be 16 slots x OUTPOST_SLOT_BYTES");
+
 #define RING_MASK (RING_SLOTS - 1u)
 
 static struct outpost_slot ring[RING_SLOTS];
@@ -170,6 +174,26 @@ static void note_drop(uint32_t cycles)
 	gap_last = cycles;
 }
 
+#if defined(CONFIG_EMBARCH_OUTPOST_OVERFLOW_BLOCK)
+/* Can this caller sleep so the drain thread runs? k_can_yield() excludes ISRs,
+ * pre-kernel and the idle thread; the other two are the drain thread itself,
+ * which would wait on its own consumption, and a caller with interrupts locked,
+ * where a sleep never wakes. Those drop.
+ */
+static bool can_wait_for_space(void)
+{
+	if (!k_can_yield() || k_current_get() == &outpost_drain_thread) {
+		return false;
+	}
+
+	unsigned int key = arch_irq_lock();
+	bool unlocked = arch_irq_unlocked(key);
+
+	arch_irq_unlock(key);
+	return unlocked;
+}
+#endif
+
 void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 {
 	uint32_t cycles = outpost_cycles();
@@ -186,12 +210,13 @@ void outpost_ring_put(uint8_t kind, uint32_t a, uint32_t b)
 		if ((head - tail) >= RING_SLOTS) {
 #if defined(CONFIG_EMBARCH_OUTPOST_OVERFLOW_BLOCK)
 			/* Blocking is a deliberate high-fidelity mode and it
-			 * perturbs the timing being measured. It is not
-			 * available in interrupt context, which can never
-			 * block: those records still drop.
+			 * perturbs the timing being measured. It sleeps rather
+			 * than k_yield()s: the drain thread runs at a lower
+			 * priority than most producers, and a yield never
+			 * reaches it. Contexts that cannot sleep still drop.
 			 */
-			if (!k_is_in_isr() && !k_is_pre_kernel()) {
-				k_yield();
+			if (can_wait_for_space()) {
+				k_sleep(K_MSEC(1));
 				continue;
 			}
 #endif
